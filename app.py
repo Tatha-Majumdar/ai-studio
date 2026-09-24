@@ -4,7 +4,7 @@ import os
 
 # ============ CONFIG ============
 API_BASE_URL = "https://api.stepfun.ai/step_plan/v1"
-MODEL_NAME = "step-5-preview"  # Hard-coded, no dropdown needed
+MODEL_NAME = "step-5-preview"
 
 # ============ MENTOR BRAIN ============
 MENTOR_PROMPT = """
@@ -65,21 +65,24 @@ if "messages" not in st.session_state:
 if "pending_start" not in st.session_state:
     st.session_state.pending_start = None
 
-# ============ READ API KEY (INVISIBLE) ============
-# Reads from Streamlit Cloud secrets — never shown to anyone
+# ============ API KEY (Hidden) ============
 API_KEY = st.secrets.get("STEPFUN_API_KEY", os.environ.get("STEPFUN_API_KEY", ""))
 
-# ============ CSS (Apple-Style, Minimal) ============
+# ============ APPLE HIG DARK MODE CSS ============
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
     
+    /* Apple Dark Mode Base */
     .stApp {
-        font-family: 'Inter', -apple-system, sans-serif;
-        background: #ffffff;
+        background-color: #000000; /* System background */
+        color: #FFFFFF; /* Primary text */
+        font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Inter', sans-serif;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
     }
     
-    /* Hide ALL Streamlit chrome */
+    /* Hide all Streamlit chrome */
     #MainMenu, footer, header {
         visibility: hidden;
     }
@@ -89,95 +92,204 @@ st.markdown("""
         display: none !important;
     }
     
+    /* Container */
     .block-container {
-        padding-top: 2rem;
-        padding-bottom: 6rem;
+        padding-top: 2.5rem;
+        padding-bottom: 7rem;
         max-width: 680px;
     }
     
+    /* ============ TYPOGRAPHY ============ */
     .main-header {
         text-align: center;
-        padding: 0.5rem 0;
-        margin-bottom: 1rem;
+        padding: 0 0 2rem 0;
     }
     
     .main-header h1 {
         font-size: 3rem;
         font-weight: 700;
-        letter-spacing: -0.045em;
-        color: #1d1d1f;
+        letter-spacing: -0.04em; /* Apple's tight tracking for large text */
+        color: #FFFFFF;
         margin: 0;
+        line-height: 1.05;
     }
     
-    .main-header p {
-        font-size: 1.1rem;
-        color: #86868b;
+    .main-header .subtitle {
+        font-size: 1.125rem;
         font-weight: 400;
-        margin-top: 0.4rem;
+        color: #8E8E93; /* Secondary label color */
+        letter-spacing: -0.01em;
+        margin-top: 0.5rem;
+        line-height: 1.4;
     }
     
-    /* Project buttons — Apple card style */
+    /* ============ PROJECT CARDS (Elevated Surfaces) ============ */
     .stButton > button {
-        background: #f5f5f7;
-        color: #1d1d1f;
-        border: 1px solid #e8e8ed;
-        border-radius: 18px;
+        /* Apple elevated surface */
+        background: linear-gradient(180deg, #1C1C1E 0%, #2C2C2E 100%);
+        color: #FFFFFF;
+        border: 1px solid #3A3A3C; /* Separator color */
+        border-radius: 16px; /* Apple's standard corner radius */
         padding: 1.25rem 1.5rem;
         font-weight: 500;
-        font-size: 0.95rem;
-        font-family: 'Inter', sans-serif;
+        font-size: 1rem;
+        font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif;
         width: 100%;
         height: auto;
-        transition: all 0.2s;
+        transition: all 0.2s cubic-bezier(0.25, 0.1, 0.25, 1);
         text-align: left;
-        line-height: 1.5;
-        margin-bottom: 0.5rem;
+        line-height: 1.4;
+        margin-bottom: 0.75rem;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.3);
     }
     
     .stButton > button:hover {
-        background: #ffffff;
-        border-color: #0071e3;
-        box-shadow: 0 2px 16px rgba(0,0,0,0.08);
+        background: linear-gradient(180deg, #2C2C2E 0%, #3A3A3C 100%);
+        border-color: #48484A;
+        box-shadow: 0 2px 12px rgba(0,0,0,0.5);
     }
     
-    /* Chat messages */
+    .stButton > button:focus {
+        outline: none;
+        border-color: #0A84FF; /* Apple blue */
+        box-shadow: 0 0 0 3px rgba(10,132,255,0.3);
+    }
+    
+    /* ============ CHAT MESSAGES ============ */
     [data-testid="stChatMessage"] {
         background: transparent;
         border: none;
-        padding: 0.5rem 0;
+        padding: 0.75rem 0;
+        border-radius: 0;
     }
     
     [data-testid="stChatMessageContent"] {
-        font-size: 0.95rem;
+        font-size: 1rem;
         line-height: 1.6;
-        color: #1d1d1f;
+        color: #FFFFFF;
+        font-weight: 400;
     }
     
-    /* Chat input */
+    /* Code blocks */
+    [data-testid="stChatMessage"] pre {
+        background: #1C1C1E; /* Elevated surface */
+        border: 1px solid #3A3A3C;
+        border-radius: 12px;
+        padding: 1rem;
+        font-size: 0.875rem;
+        color: #FFFFFF;
+        font-family: 'SF Mono', 'Menlo', monospace;
+    }
+    
+    [data-testid="stChatMessage"] code {
+        font-family: 'SF Mono', 'Menlo', monospace;
+        background: #2C2C2E;
+        color: #0A84FF;
+        padding: 0.125rem 0.375rem;
+        border-radius: 6px;
+        font-size: 0.875em;
+    }
+    
+    /* Headers inside chat */
+    [data-testid="stChatMessage"] h1,
+    [data-testid="stChatMessage"] h2,
+    [data-testid="stChatMessage"] h3 {
+        color: #FFFFFF;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+        margin-top: 1.5rem;
+        margin-bottom: 0.75rem;
+    }
+    
+    [data-testid="stChatMessage"] h1 { font-size: 1.5rem; }
+    [data-testid="stChatMessage"] h2 { font-size: 1.25rem; }
+    [data-testid="stChatMessage"] h3 { font-size: 1.125rem; }
+    
+    /* Lists */
+    [data-testid="stChatMessage"] ul,
+    [data-testid="stChatMessage"] ol {
+        padding-left: 1.5rem;
+        margin: 0.75rem 0;
+    }
+    
+    /* ============ CHAT INPUT ============ */
     [data-testid="stChatInput"] {
         border-radius: 22px;
     }
     
     [data-testid="stChatInput"] textarea {
+        background: #1C1C1E !important;
+        border: 1px solid #3A3A3C !important;
         border-radius: 22px !important;
-        font-family: 'Inter', sans-serif !important;
-        border: 1px solid #d2d2d7 !important;
+        font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif !important;
+        color: #FFFFFF !important;
+        font-size: 1rem !important;
+        padding: 0.875rem 1.25rem !important;
+        box-shadow: 0 1px 6px rgba(0,0,0,0.3) !important;
+        transition: all 0.2s !important;
     }
     
     [data-testid="stChatInput"] textarea:focus {
-        border-color: #0071e3 !important;
+        border-color: #0A84FF !important;
+        box-shadow: 0 0 0 3px rgba(10,132,255,0.2), 0 1px 6px rgba(0,0,0,0.3) !important;
+        background: #2C2C2E !important;
     }
     
-    /* Code blocks in chat */
-    [data-testid="stChatMessage"] pre {
-        background: #1d1d1f;
-        border-radius: 14px;
-        padding: 1rem;
-        font-size: 0.85rem;
+    [data-testid="stChatInput"] textarea::placeholder {
+        color: #8E8E93 !important;
     }
     
-    [data-testid="stChatMessage"] code {
-        font-family: 'SF Mono', 'Menlo', monospace;
+    /* ============ OTHER ELEMENTS ============ */
+    .stSpinner > div {
+        border-top-color: #0A84FF !important;
+    }
+    
+    /* Divider */
+    hr {
+        border: none;
+        height: 1px;
+        background: #3A3A3C;
+        margin: 2rem auto;
+        max-width: 100%;
+    }
+    
+    /* Caption text */
+    .stCaption, .stMarkdown p {
+        color: #8E8E93;
+    }
+    
+    /* Error messages */
+    [data-testid="stError"] {
+        background: #1C1C1E;
+        border: 1px solid #FF453A; /* Apple red */
+        border-radius: 12px;
+        color: #FF453A;
+    }
+    
+    /* Success messages */
+    [data-testid="stSuccess"] {
+        background: #1C1C1E;
+        border: 1px solid #30D158; /* Apple green */
+        border-radius: 12px;
+        color: #30D158;
+    }
+    
+    /* Warning messages */
+    [data-testid="stWarning"] {
+        background: #1C1C1E;
+        border: 1px solid #FFD60A; /* Apple yellow */
+        border-radius: 12px;
+        color: #FFD60A;
+    }
+    
+    /* Footer */
+    .app-footer {
+        text-align: center;
+        color: #48484A; /* Tertiary label */
+        font-size: 0.8125rem;
+        margin-top: 3rem;
+        padding-top: 1rem;
+        border-top: 1px solid #3A3A3C;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -187,7 +299,16 @@ def get_ai_response(user_message):
     """Send message to StepFun API and return response."""
     
     if not API_KEY:
-        return "⚠️ **Setup needed.**\n\nGo to your Streamlit Cloud app settings → Secrets → add:\n```\nSTEPFUN_API_KEY = \"your_key_here\"\n```"
+        return """
+        ⚠️ **Setup Required**
+        
+        Your API key isn't configured yet.
+        
+        **How to fix:**
+        1. Go to your Streamlit Cloud app
+        2. Click Settings → Secrets
+        3. Add: `STEPFUN_API_KEY = "your_key_here"`
+        """
     
     try:
         client = OpenAI(
@@ -217,9 +338,9 @@ def get_ai_response(user_message):
     except Exception as e:
         error_msg = str(e)
         if "401" in error_msg:
-            return "❌ **API key invalid.** Check your key in Streamlit Cloud secrets."
+            return "❌ **Invalid API key.** Check your key in Streamlit Cloud secrets."
         elif "404" in error_msg:
-            return f"❌ **Model not found.** The model `{MODEL_NAME}` might not be available on your key."
+            return f"❌ **Model not found.** `{MODEL_NAME}` might not be available."
         elif "429" in error_msg:
             return "⏳ **Rate limit.** Wait a moment and try again."
         else:
@@ -231,13 +352,14 @@ def get_ai_response(user_message):
 st.markdown("""
 <div class="main-header">
     <h1>Studio.</h1>
-    <p>Build real projects. Learn by doing.</p>
+    <p class="subtitle">Build real projects. Learn by doing.</p>
 </div>
 """, unsafe_allow_html=True)
 
 # ============ PROJECT SELECTION ============
 if len(st.session_state.messages) == 0 and not st.session_state.pending_start:
     
+    st.markdown("##### Choose a project:")
     st.write("")
     
     # Topology Optimization
@@ -258,14 +380,14 @@ if len(st.session_state.messages) == 0 and not st.session_state.pending_start:
     
     # Custom
     if st.button(
-        "💡  Your Own Project\n\nHave an idea? Start here and the mentor will guide you.",
+        "💡  Custom Project\n\nHave your own idea? The mentor will guide you through it.",
         use_container_width=True
     ):
-        st.session_state.pending_start = "I have my own project idea I want to work on. What do you need to know to get started?"
+        st.session_state.pending_start = "I have my own project idea. What do you need to know to get started?"
         st.rerun()
     
-    st.write("")
-    st.caption("— or type below —")
+    st.markdown("---")
+    st.caption("Or type your message below")
 
 # ============ HANDLE PROJECT START ============
 if st.session_state.pending_start:
@@ -286,18 +408,21 @@ for message in st.session_state.messages:
         st.write(message["content"])
 
 # ============ CHAT INPUT ============
-if prompt := st.chat_input("Type here..."):
+if prompt := st.chat_input("Message"):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.write(prompt)
     
     with st.chat_message("assistant"):
-        with st.spinner("Thinking..."):
+        with st.spinner(""):
             response = get_ai_response(prompt)
             st.write(response)
     
     st.session_state.messages.append({"role": "assistant", "content": response})
 
 # ============ FOOTER ============
-st.write("")
-st.caption("Studio — Project-based engineering mentorship")
+st.markdown("""
+<div class="app-footer">
+    Studio — Project-based engineering mentorship
+</div>
+""", unsafe_allow_html=True)
