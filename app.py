@@ -4,14 +4,7 @@ import os
 
 # ============ CONFIG ============
 API_BASE_URL = "https://api.stepfun.ai/step_plan/v1"
-
-# ============ PAGE SETUP ============
-st.set_page_config(
-    page_title="Studio — Project-Based Learning",
-    page_icon="🎓",
-    layout="centered",
-    initial_sidebar_state="expanded"  # Changed: sidebar visible by default
-)
+MODEL_NAME = "step-5-preview"  # Hard-coded, no dropdown needed
 
 # ============ MENTOR BRAIN ============
 MENTOR_PROMPT = """
@@ -72,22 +65,44 @@ if "messages" not in st.session_state:
 if "pending_start" not in st.session_state:
     st.session_state.pending_start = None
 
-# ============ CSS (Minimal, Non-Conflicting) ============
+# ============ READ API KEY (INVISIBLE) ============
+# Reads from Streamlit Cloud secrets — never shown to anyone
+API_KEY = st.secrets.get("STEPFUN_API_KEY", os.environ.get("STEPFUN_API_KEY", ""))
+
+# ============ CSS (Apple-Style, Minimal) ============
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
     
     .stApp {
         font-family: 'Inter', -apple-system, sans-serif;
+        background: #ffffff;
+    }
+    
+    /* Hide ALL Streamlit chrome */
+    #MainMenu, footer, header {
+        visibility: hidden;
+    }
+    
+    /* Hide sidebar completely */
+    [data-testid="stSidebar"] {
+        display: none !important;
+    }
+    
+    .block-container {
+        padding-top: 2rem;
+        padding-bottom: 6rem;
+        max-width: 680px;
     }
     
     .main-header {
         text-align: center;
-        padding: 1rem 0 0.5rem 0;
+        padding: 0.5rem 0;
+        margin-bottom: 1rem;
     }
     
     .main-header h1 {
-        font-size: 2.8rem;
+        font-size: 3rem;
         font-weight: 700;
         letter-spacing: -0.045em;
         color: #1d1d1f;
@@ -98,85 +113,88 @@ st.markdown("""
         font-size: 1.1rem;
         color: #86868b;
         font-weight: 400;
-        margin-top: 0.3rem;
+        margin-top: 0.4rem;
     }
     
-    /* Style Streamlit buttons to look Apple-like */
+    /* Project buttons — Apple card style */
     .stButton > button {
         background: #f5f5f7;
         color: #1d1d1f;
-        border: 1px solid #d2d2d7;
+        border: 1px solid #e8e8ed;
         border-radius: 18px;
-        padding: 1rem;
+        padding: 1.25rem 1.5rem;
         font-weight: 500;
-        font-size: 0.9rem;
+        font-size: 0.95rem;
         font-family: 'Inter', sans-serif;
         width: 100%;
         height: auto;
         transition: all 0.2s;
         text-align: left;
-        line-height: 1.4;
+        line-height: 1.5;
+        margin-bottom: 0.5rem;
     }
     
     .stButton > button:hover {
         background: #ffffff;
         border-color: #0071e3;
-        box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+        box-shadow: 0 2px 16px rgba(0,0,0,0.08);
+    }
+    
+    /* Chat messages */
+    [data-testid="stChatMessage"] {
+        background: transparent;
+        border: none;
+        padding: 0.5rem 0;
+    }
+    
+    [data-testid="stChatMessageContent"] {
+        font-size: 0.95rem;
+        line-height: 1.6;
+        color: #1d1d1f;
+    }
+    
+    /* Chat input */
+    [data-testid="stChatInput"] {
+        border-radius: 22px;
+    }
+    
+    [data-testid="stChatInput"] textarea {
+        border-radius: 22px !important;
+        font-family: 'Inter', sans-serif !important;
+        border: 1px solid #d2d2d7 !important;
+    }
+    
+    [data-testid="stChatInput"] textarea:focus {
+        border-color: #0071e3 !important;
+    }
+    
+    /* Code blocks in chat */
+    [data-testid="stChatMessage"] pre {
+        background: #1d1d1f;
+        border-radius: 14px;
+        padding: 1rem;
+        font-size: 0.85rem;
+    }
+    
+    [data-testid="stChatMessage"] code {
+        font-family: 'SF Mono', 'Menlo', monospace;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# ============ SIDEBAR ============
-with st.sidebar:
-    st.title("⚙️ Settings")
-    
-    # API Key
-    api_key = st.text_input(
-        "StepFun API Key",
-        type="password",
-        help="Get yours from your StepFun dashboard",
-        value=st.secrets.get("STEPFUN_API_KEY", "")
-    )
-    
-    # Model Selection
-    MODEL_OPTIONS = [
-        "step-5-preview",
-        "step-1-8k",
-        "step-1-32k",
-        "step-2-16k",
-    ]
-    
-    model_name = st.selectbox(
-        "Model",
-        MODEL_OPTIONS,
-        index=0,
-    )
-    
-    if api_key:
-        st.success("✅ Ready to learn!")
-    else:
-        st.warning("⚠️ Enter your API key above")
-    
-    st.divider()
-    
-    if st.button("🗑️ Clear Conversation"):
-        st.session_state.messages = []
-        st.rerun()
-
-# ============ FUNCTION TO GET AI RESPONSE ============
+# ============ FUNCTION: GET AI RESPONSE ============
 def get_ai_response(user_message):
-    """Send message to StepFun API and return the response."""
+    """Send message to StepFun API and return response."""
     
-    if not api_key:
-        return "⚠️ **No API key set.**\n\nPlease open the sidebar (left side) and paste your StepFun API key, then try again."
+    if not API_KEY:
+        return "⚠️ **Setup needed.**\n\nGo to your Streamlit Cloud app settings → Secrets → add:\n```\nSTEPFUN_API_KEY = \"your_key_here\"\n```"
     
     try:
         client = OpenAI(
-            api_key=api_key,
+            api_key=API_KEY,
             base_url=API_BASE_URL
         )
         
-        # Build conversation
         api_messages = [{"role": "system", "content": MENTOR_PROMPT}]
         
         for msg in st.session_state.messages:
@@ -185,12 +203,10 @@ def get_ai_response(user_message):
                 "content": msg["content"]
             })
         
-        # Add the new user message
         api_messages.append({"role": "user", "content": user_message})
         
-        # Call API (non-streaming for reliability)
         response = client.chat.completions.create(
-            model=model_name,
+            model=MODEL_NAME,
             messages=api_messages,
             max_tokens=4000,
             temperature=0.6
@@ -201,9 +217,9 @@ def get_ai_response(user_message):
     except Exception as e:
         error_msg = str(e)
         if "401" in error_msg:
-            return "❌ **Invalid API key.** Check your key in the sidebar."
+            return "❌ **API key invalid.** Check your key in Streamlit Cloud secrets."
         elif "404" in error_msg:
-            return f"❌ **Model not found:** `{model_name}`. Try selecting 'step-1-8k' in the sidebar."
+            return f"❌ **Model not found.** The model `{MODEL_NAME}` might not be available on your key."
         elif "429" in error_msg:
             return "⏳ **Rate limit.** Wait a moment and try again."
         else:
@@ -219,73 +235,62 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# ============ PROJECT SELECTION (When No Messages) ============
+# ============ PROJECT SELECTION ============
 if len(st.session_state.messages) == 0 and not st.session_state.pending_start:
     
-    st.write("")  # spacing
-    st.markdown("##### Choose a project to begin:")
     st.write("")
     
-    # Project 1: Topology Optimization
+    # Topology Optimization
     if st.button(
-        "🏗️  Topology Optimization\n\nBuild a working SIMP solver from scratch. Learn Python, FEA, and structural design as you build.",
+        "🏗️  Topology Optimization\n\nBuild a working SIMP solver. Learn Python, FEA, and structural design.",
         use_container_width=True
     ):
-        st.session_state.pending_start = "I want to start the topology optimization project. Please give me the project brief and scope."
+        st.session_state.pending_start = "I want to start the topology optimization project. Give me the project brief and scope."
+        st.rerun()
+    
+    # System Design
+    if st.button(
+        "📐  System Design\n\nDesign and build real systems from requirements to working code.",
+        use_container_width=True
+    ):
+        st.session_state.pending_start = "I want to start the system design project. Give me the project brief and scope."
+        st.rerun()
+    
+    # Custom
+    if st.button(
+        "💡  Your Own Project\n\nHave an idea? Start here and the mentor will guide you.",
+        use_container_width=True
+    ):
+        st.session_state.pending_start = "I have my own project idea I want to work on. What do you need to know to get started?"
         st.rerun()
     
     st.write("")
-    
-    # Project 2: System Design  
-    if st.button(
-        "📐  System Design\n\nDesign and build real systems. From requirements to architecture to working code.",
-        use_container_width=True
-    ):
-        st.session_state.pending_start = "I want to start the system design project. Please give me the project brief and scope."
-        st.rerun()
-    
-    st.write("")
-    
-    # Project 3: Custom
-    if st.button(
-        "💡  Your Own Project\n\nHave an idea? The mentor will guide you through it with industry-level rigor.",
-        use_container_width=True
-    ):
-        st.session_state.pending_start = "I have my own project idea I want to work on. What information do you need from me to get started?"
-        st.rerun()
-    
-    st.write("")
-    st.caption("Or type your question in the box below ⬇️")
+    st.caption("— or type below —")
 
-# ============ HANDLE PENDING START ============
+# ============ HANDLE PROJECT START ============
 if st.session_state.pending_start:
-    # Add as user message
     user_msg = st.session_state.pending_start
     st.session_state.pending_start = None
     
-    # Add to history
     st.session_state.messages.append({"role": "user", "content": user_msg})
     
-    # Get response
     with st.spinner("Starting your project..."):
         response = get_ai_response(user_msg)
         st.session_state.messages.append({"role": "assistant", "content": response})
     
     st.rerun()
 
-# ============ DISPLAY CHAT HISTORY ============
+# ============ DISPLAY CHAT ============
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.write(message["content"])
 
 # ============ CHAT INPUT ============
-if prompt := st.chat_input("Type your message here..."):
-    # Add user message
+if prompt := st.chat_input("Type here..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.write(prompt)
     
-    # Get AI response
     with st.chat_message("assistant"):
         with st.spinner("Thinking..."):
             response = get_ai_response(prompt)
