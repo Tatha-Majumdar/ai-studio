@@ -23,8 +23,7 @@ DEFAULTS = {
     "code_output": "",
     "code_error": "",
     "code_ran": False,
-    "current_plot": None,
-    "has_plot": False,
+    "visual_plots": [],  # Store executed figures
     "show_quiz": False,
     "quiz_question": "",
     "quiz_options": [],
@@ -89,19 +88,43 @@ except:
 if not API_KEY:
     API_KEY = os.environ.get("STEPFUN_API_KEY", "")
 
-# ============ MENTOR PROMPT ============
+# ============ MENTOR PROMPT (FIXED) ============
 MENTOR_PROMPT = (
-    "You are a senior engineering mentor. You teach Topology Optimization and System Design. "
+    "You are a senior engineering mentor teaching Topology Optimization and System Design. "
     "The student may have zero coding experience.\n\n"
-    "CRITICAL: Never say imagine, picture, or visualize. The student must SEE everything. "
-    "Always provide matplotlib code, printed output, concrete examples, or ASCII diagrams.\n\n"
-    "Use [PRACTICE] at the end of a message to give a coding exercise.\n"
-    "Use [QUIZ] Question | Option A | Option B for quizzes.\n\n"
-    "Rules: One concept at a time. Always show visuals. Code must run. "
-    "Keep responses under 200 words. Track what was taught.\n\n"
-    "For Topology Optimization: build a SIMP solver, teach Python as needed.\n"
-    "For System Design: build real systems, teach coding as needed.\n\n"
-    "Start: Ask about coding experience, then begin lesson 1 with a visual example."
+    
+    "CRITICAL INTERACTION RULES - FOLLOW THESE EXACTLY:\n"
+    "1. ASK ONE QUESTION AT A TIME. When you ask a question, STOP. End your message. "
+    "Do NOT continue to the next lesson. WAIT for the student to respond first.\n"
+    "2. ONE MESSAGE = ONE PURPOSE. Either ask a question, OR give a lesson, OR show a visual. "
+    "NEVER combine asking a question with giving a lesson in the same message.\n"
+    "3. When the student answers your question, THEN give the next lesson.\n\n"
+    
+    "VISUALIZATION RULES:\n"
+    "4. NEVER paste matplotlib code as plain text in your message. The student cannot run it there.\n"
+    "5. When you want to SHOW a visualization (plot, diagram, structure), use this format:\n"
+    "   [VISUAL]\n"
+    "   <python code that creates the plot>\n"
+    "   [/VISUAL]\n"
+    "   The platform will execute this code and display the image to the student.\n"
+    "6. When you want the STUDENT to write code, use:\n"
+    "   [PRACTICE] <exercise description>\n"
+    "7. Use [VISUAL] for showing concepts. Use [PRACTICE] for exercises.\n\n"
+    
+    "NO IMAGINING RULE:\n"
+    "8. Never say imagine, picture, or visualize. The student must SEE everything.\n"
+    "9. Every concept must be shown with a [VISUAL] block or concrete code output.\n\n"
+    
+    "TEACHING FLOW:\n"
+    "Step 1: Ask about coding experience. WAIT for answer.\n"
+    "Step 2: Based on answer, start Lesson 1 with a [VISUAL] showing the concept.\n"
+    "Step 3: Explain what the visual shows.\n"
+    "Step 4: [PRACTICE] exercise for the student.\n"
+    "Step 5: Review their work when submitted.\n"
+    "Step 6: Continue to next concept.\n\n"
+    
+    "STYLE: Under 200 words per message. Track what was taught. "
+    "Reference previous lessons. Be encouraging but rigorous."
 )
 
 # ============ PAGE SETUP ============
@@ -114,7 +137,7 @@ st.set_page_config(
 # ============ CSS ============
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400&display=swap');
 
 .stApp {
     background: #0A0A0A;
@@ -181,6 +204,7 @@ st.markdown("""
     border-radius: 10px;
     padding: 0.875rem;
     font-size: 0.8125rem;
+    font-family: 'JetBrains Mono', monospace;
     color: #E0E0E0;
 }
 
@@ -189,6 +213,7 @@ st.markdown("""
     color: #7DD3FC;
     padding: 2px 6px;
     border-radius: 4px;
+    font-size: 0.85em;
 }
 
 [data-testid="stChatMessage"] pre code {
@@ -287,6 +312,24 @@ st.markdown("""
 }
 
 hr { border: none; height: 1px; background: #1A1A1A; margin: 1rem 0; }
+
+.visual-block {
+    background: #141414;
+    border: 1px solid #0A84FF30;
+    border-radius: 12px;
+    padding: 0.5rem;
+    margin: 0.75rem 0;
+}
+
+.visual-label {
+    font-size: 0.6875rem;
+    font-weight: 700;
+    color: #0A84FF;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-bottom: 0.5rem;
+    padding-left: 0.5rem;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -295,26 +338,60 @@ def safe_clean(text):
     if not text or not isinstance(text, str):
         return ""
     try:
-        clean = re.sub(r'\[PRACTICE\].*', '', text, flags=re.DOTALL)
+        # Remove [VISUAL]...[/VISUAL] blocks
+        clean = re.sub(r'\[VISUAL\].*?\[/VISUAL\]', '[VISUALIZATION SHOWN ABOVE]', text, flags=re.DOTALL)
+        clean = re.sub(r'\[PRACTICE\].*', '', clean, flags=re.DOTALL)
         clean = re.sub(r'\[QUIZ\].*', '', clean, flags=re.DOTALL)
         return clean.strip()
     except:
         return str(text) if text else ""
 
+def extract_visual_code(text):
+    """Extract matplotlib code from [VISUAL]...[/VISUAL] blocks."""
+    if not text or not isinstance(text, str):
+        return []
+    
+    codes = []
+    pattern = r'\[VISUAL\]\s*(.*?)\s*\[/VISUAL\]'
+    matches = re.findall(pattern, text, flags=re.DOTALL)
+    
+    for match in matches:
+        # Clean up the code
+        code = match.strip()
+        if code.startswith('```python'):
+            code = code[9:]
+        if code.startswith('```'):
+            code = code[3:]
+        if code.endswith('```'):
+            code = code[:-3]
+        code = code.strip()
+        if code:
+            codes.append(code)
+    
+    return codes
+
 def parse_ai_response(text):
+    """Parse AI markers."""
     if not text or not isinstance(text, str):
         return
+    
+    # [PRACTICE] marker
     try:
         if "[PRACTICE]" in text:
             match = re.search(r'\[PRACTICE\]\s*(.+)', text, re.DOTALL)
             if match:
+                # Remove any [VISUAL] blocks from the exercise
+                exercise = match.group(1).strip()
+                exercise = re.sub(r'\[VISUAL\].*?\[/VISUAL\]', '', exercise, flags=re.DOTALL).strip()
                 st.session_state.show_code_editor = True
-                st.session_state.code_exercise = match.group(1).strip()
+                st.session_state.code_exercise = exercise
                 st.session_state.code_ran = False
                 st.session_state.code_output = ""
                 st.session_state.code_error = ""
     except:
         pass
+    
+    # [QUIZ] marker
     try:
         if "[QUIZ]" in text:
             parts = text.split("[QUIZ]")[1].split("|")
@@ -325,7 +402,55 @@ def parse_ai_response(text):
     except:
         pass
 
+def execute_visual_code(code):
+    """Execute matplotlib code and return the figure."""
+    if not code:
+        return None
+    
+    old_stdout = sys.stdout
+    old_stderr = sys.stderr
+    stdout_cap = io.StringIO()
+    stderr_cap = io.StringIO()
+    
+    namespace = {"__name__": "__main__"}
+    
+    # Import matplotlib
+    try:
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        namespace['plt'] = plt
+    except:
+        return None
+    
+    # Import numpy
+    try:
+        import numpy as np
+        namespace['np'] = np
+    except:
+        pass
+    
+    try:
+        with contextlib.redirect_stdout(stdout_cap):
+            with contextlib.redirect_stderr(stderr_cap):
+                exec(code, namespace)
+        
+        # Get the figure
+        nums = plt.get_fignums()
+        if nums:
+            fig = plt.figure(nums[0])
+            plt.close('all')  # Clear for next time
+            return fig
+        return None
+        
+    except Exception:
+        return None
+    finally:
+        sys.stdout = old_stdout
+        sys.stderr = old_stderr
+
 def execute_code(code):
+    """Execute code for practice exercises."""
     if not code:
         return "", "No code", False, None
     
@@ -365,11 +490,11 @@ def execute_code(code):
         has_fig = False
         fig = None
         try:
-            if 'plt' in namespace:
-                nums = plt.get_fignums()
-                if nums:
-                    has_fig = True
-                    fig = plt.figure(nums[0])
+            nums = plt.get_fignums()
+            if nums:
+                has_fig = True
+                fig = plt.figure(nums[0])
+                plt.close('all')
         except:
             pass
         
@@ -383,10 +508,10 @@ def execute_code(code):
         sys.stderr = old_stderr
 
 def call_api(user_message):
-    """Simple non-streaming API call. Returns response text or error."""
+    """Simple API call. Returns response text."""
     
     if not API_KEY:
-        return "ERROR: No API key found. Go to Settings > Secrets and add STEPFUN_API_KEY."
+        return "ERROR: No API key found. Add STEPFUN_API_KEY in Streamlit Cloud Secrets."
     
     try:
         client = OpenAI(api_key=API_KEY, base_url=API_BASE_URL)
@@ -419,11 +544,9 @@ def call_api(user_message):
     except Exception as e:
         err = str(e)
         if "401" in err:
-            return "ERROR: Invalid API key. Check your secrets."
+            return "ERROR: Invalid API key."
         elif "429" in err:
             return "ERROR: Rate limited. Wait a moment."
-        elif "404" in err:
-            return "ERROR: Model not found. The model name may be wrong."
         else:
             return "ERROR: " + err[:100]
 
@@ -439,7 +562,7 @@ st.markdown("""
 if len(st.session_state.get("messages", [])) > 0:
     count = len(st.session_state.messages)
     st.markdown(
-        f'<div style="background:#0A84FF15;border:1px solid #0A84FF30;border-radius:10px;padding:0.5rem 1rem;text-align:center;margin:0.5rem 0;"><p style="color:#7DD3FC;font-size:0.8125rem;margin:0;">Welcome back - {count} messages saved</p></div>',
+        f'<div style="background:#0A84FF15;border:1px solid #0A84FF30;border-radius:10px;padding:0.5rem 1rem;text-align:center;margin:0.5rem 0;"><p style="color:#7DD3FC;font-size:0.8125rem;margin:0;">Welcome back - {count} messages</p></div>',
         unsafe_allow_html=True
     )
 
@@ -448,21 +571,19 @@ if len(st.session_state.get("messages", [])) == 0:
 
     st.write("")
     
-    # Show API key status
     if API_KEY:
         st.markdown(
-            '<p style="color:#30D158;font-size:0.75rem;text-align:center;">API key found - ready to start</p>',
+            '<p style="color:#30D158;font-size:0.75rem;text-align:center;">Ready to start</p>',
             unsafe_allow_html=True
         )
     else:
         st.markdown(
-            '<p style="color:#FF453A;font-size:0.75rem;text-align:center;">No API key found - add STEPFUN_API_KEY in Secrets</p>',
+            '<p style="color:#FF453A;font-size:0.75rem;text-align:center;">No API key - add in Secrets</p>',
             unsafe_allow_html=True
         )
     
     st.write("")
     
-    # Topology Optimization card
     st.markdown("""
     <div class="project-card">
         <h3>Topology Optimization</h3>
@@ -475,7 +596,6 @@ if len(st.session_state.get("messages", [])) == 0:
     
     st.write("")
     
-    # System Design card
     st.markdown("""
     <div class="project-card">
         <h3>System Design</h3>
@@ -490,51 +610,70 @@ if len(st.session_state.get("messages", [])) == 0:
 if st.session_state.get("start_requested"):
     track = st.session_state.start_requested
     st.session_state.start_requested = None
-    
     st.session_state.current_track = track
     
     if track == "topology":
-        first_msg = "I want to start learning Topology Optimization from the very beginning. I need everything shown visually."
+        first_msg = "I want to start Topology Optimization from the very beginning."
     else:
-        first_msg = "I want to start learning System Design from the very beginning. I need everything shown visually."
+        first_msg = "I want to start System Design from the very beginning."
     
-    # Add user message
     st.session_state.messages = [{"role": "user", "content": first_msg}]
     
-    # Show loading
-    with st.chat_message("assistant"):
-        with st.spinner("Starting your project..."):
-            # Call API
-            response = call_api(first_msg)
+    with st.spinner("Starting..."):
+        response = call_api(first_msg)
     
-    # Add AI response
     st.session_state.messages.append({"role": "assistant", "content": response})
-    
-    # Save
     save_history()
-    
-    # Force page refresh to show conversation
     st.rerun()
 
-# ============ DISPLAY CHAT ============
+# ============ DISPLAY CHAT (WITH VISUALS) ============
 for message in st.session_state.get("messages", []):
     role = message.get("role", "user")
     content = message.get("content", "")
-    clean = safe_clean(content)
     
-    if not clean:
+    if not content:
         continue
     
+    # For user messages - right aligned
     if role == "user":
-        _, col = st.columns([0.35, 0.65])
-        with col:
-            with st.chat_message("user"):
-                st.write(clean)
+        clean = safe_clean(content)
+        if clean:
+            _, col = st.columns([0.35, 0.65])
+            with col:
+                with st.chat_message("user"):
+                    st.write(clean)
+    
+    # For assistant messages - left aligned, with visuals
     else:
-        col, _ = st.columns([0.8, 0.2])
-        with col:
-            with st.chat_message("assistant"):
-                st.write(clean)
+        # Check for [VISUAL] blocks
+        visual_codes = extract_visual_code(content)
+        
+        if visual_codes:
+            # Split message into text and visual parts
+            # Display text part
+            clean = safe_clean(content)
+            col, _ = st.columns([0.8, 0.2])
+            with col:
+                with st.chat_message("assistant"):
+                    st.write(clean)
+            
+            # Display visualizations
+            for code in visual_codes:
+                st.markdown('<div class="visual-block"><div class="visual-label">Visualization</div>', unsafe_allow_html=True)
+                fig = execute_visual_code(code)
+                if fig is not None:
+                    st.pyplot(fig, use_container_width=True)
+                else:
+                    st.caption("Visualization unavailable")
+                st.markdown('</div>', unsafe_allow_html=True)
+        else:
+            # No visuals - just text
+            clean = safe_clean(content)
+            if clean:
+                col, _ = st.columns([0.8, 0.2])
+                with col:
+                    with st.chat_message("assistant"):
+                        st.write(clean)
 
 # ============ CODE SANDBOX ============
 if st.session_state.get("show_code_editor", False):
@@ -563,8 +702,6 @@ if st.session_state.get("show_code_editor", False):
                 st.session_state.code_output = output or ""
                 st.session_state.code_error = error or ""
                 st.session_state.code_ran = True
-                st.session_state.has_plot = has_fig
-                st.session_state.current_plot = fig
     
     with col2:
         if st.button("Submit to Mentor", use_container_width=True):
@@ -587,7 +724,7 @@ if st.session_state.get("show_code_editor", False):
                 st.session_state.messages.append({"role": "user", "content": submission})
                 st.session_state.show_code_editor = False
                 
-                with st.spinner("Mentor is reviewing..."):
+                with st.spinner("Reviewing..."):
                     response = call_api(submission)
                 
                 st.session_state.messages.append({"role": "assistant", "content": response})
@@ -604,17 +741,6 @@ if st.session_state.get("show_code_editor", False):
             lines = err.split("\n")
             clean_err = "\n".join(lines[-5:])
             st.markdown('<div class="error-box">' + clean_err + '</div>', unsafe_allow_html=True)
-
-# ============ VISUALIZATION ============
-if st.session_state.get("has_plot", False):
-    fig = st.session_state.get("current_plot", None)
-    if fig is not None:
-        st.markdown('<div class="section-label">Visualization</div>', unsafe_allow_html=True)
-        try:
-            st.pyplot(fig, use_container_width=True)
-        except:
-            st.caption("Run the code again to see the plot.")
-        st.write("")
 
 # ============ QUIZ ============
 if st.session_state.get("show_quiz", False):
@@ -639,7 +765,7 @@ if st.session_state.get("show_quiz", False):
             st.rerun()
 
 # ============ CHAT INPUT ============
-if prompt := st.chat_input("Type your message..."):
+if prompt := st.chat_input("Type your answer or question..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     
     _, col = st.columns([0.35, 0.65])
@@ -652,10 +778,10 @@ if prompt := st.chat_input("Type your message..."):
         with st.chat_message("assistant"):
             with st.spinner("Thinking..."):
                 response = call_api(prompt)
-            st.write(safe_clean(response))
     
     st.session_state.messages.append({"role": "assistant", "content": response})
     save_history()
+    st.rerun()
 
 # ============ FOOTER ============
 st.markdown("---")
@@ -665,8 +791,3 @@ with col2:
     if st.button("Reset", use_container_width=True):
         clear_all()
         st.rerun()
-
-st.markdown(
-    '<div style="text-align:center;color:#3A3A3C;font-size:0.6875rem;padding:0.25rem 0;">Auto-saved</div>',
-    unsafe_allow_html=True
-)
