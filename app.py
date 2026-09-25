@@ -13,6 +13,7 @@ import time
 API_BASE = "https://api.stepfun.ai/step_plan/v1"
 HISTORY = "data.json"
 
+# ============ SESSION STATE ============
 if "msgs" not in st.session_state:
     st.session_state.msgs = []
 if "editor" not in st.session_state:
@@ -36,6 +37,7 @@ if "tested" not in st.session_state:
 if "debug" not in st.session_state:
     st.session_state.debug = []
 
+# ============ PERSISTENCE ============
 def save():
     try:
         d = {"msgs": st.session_state.msgs, "model": st.session_state.model}
@@ -58,12 +60,85 @@ def load():
 
 load()
 
+# ============ API KEY ============
 KEY = ""
 try:
     KEY = st.secrets["STEPFUN_API_KEY"]
 except:
     KEY = os.environ.get("STEPFUN_API_KEY", "")
 
+# ============ PAGE CONFIG ============
+st.set_page_config(page_title="Studio", layout="centered")
+
+# ============ CSS ============
+st.markdown("""
+<style>
+html,body{
+    margin:0;padding:0;background:#0a0a0a;color:#fff;
+    font-family:-apple-system,BlinkMacSystemFont,sans-serif;
+    overflow-x:hidden;overflow-y:auto;scroll-behavior:smooth;
+}
+.stApp{min-height:100vh;background:#0a0a0a}
+#MainMenu,footer,header,[data-testid="stSidebar"],[data-testid="stToolbar"]{display:none!important}
+
+.header-fix{position:fixed;top:0;left:50%;transform:translateX(-50%);width:720px;max-width:95vw;background:#0a0a0a;z-index:100;padding:.6rem .75rem .4rem .75rem;border-bottom:1px solid #1a1a1a}
+
+.block-container{max-width:720px;margin:0 auto;padding-top:4.5rem;padding-bottom:2rem;padding-left:.75rem;padding-right:.75rem}
+
+[data-testid="stChatInput"]{position:sticky;bottom:0;background:#0a0a0a;z-index:50;padding:.5rem 0 .75rem 0}
+[data-testid="stChatInput"] textarea{background:#141414!important;border:1px solid #333!important;border-radius:18px!important;color:#fff!important;font-size:.95rem!important;padding:.875rem 1.125rem!important;min-height:48px!important;box-shadow:0 2px 8px rgba(0,0,0,.4)!important}
+[data-testid="stChatInput"] textarea:focus{border-color:#0a84ff!important}
+[data-testid="stChatInput"] textarea::placeholder{color:#555!important}
+
+[data-testid="stChatMessage"]{background:transparent;border:none;padding:.25rem 0;margin:0}
+[data-testid="stChatMessageAvatar"]{display:none}
+[data-testid="stChatMessageContent"]{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:16px;border-bottom-left-radius:4px;padding:.75rem 1rem;font-size:.9rem;line-height:1.6;color:#e0e0e0}
+[data-testid="stChatMessage"] pre{background:#0a0a0a!important;border:1px solid #2a2a2a;border-radius:8px;padding:.75rem;font-size:.8rem;max-width:100%;overflow-x:auto}
+[data-testid="stChatMessage"] code{background:#2a2a2a;color:#7dd3fc;padding:1px 5px;border-radius:4px;font-size:.85em}
+[data-testid="stChatMessage"] pre code{background:transparent;padding:0;color:inherit}
+[data-testid="stChatMessage"] strong{color:#fff;font-weight:600}
+
+.stButton>button{background:#0a84ff;color:#fff;border:none;border-radius:10px;padding:.6rem 1.2rem;font-weight:600;font-size:.875rem;width:100%;transition:background .15s}
+.stButton>button:hover{background:#409cff}
+.stButton>button[key="reset_top"]{background:transparent;color:#666;border:1px solid #2a2a2a;border-radius:8px;padding:.375rem .6rem;font-size:.7rem;width:auto}
+.stButton>button[key="reset_top"]:hover{color:#ff453a;border-color:#ff453a}
+.stButton>button[key="debug_btn"]{background:transparent;color:#888;border:1px solid #2a2a2a;border-radius:8px;padding:.375rem .6rem;font-size:.7rem;width:auto}
+
+.stTextArea textarea{background:#0a0a0a!important;border:1px solid #2a2a2a!important;border-radius:12px!important;font-family:monospace!important;color:#e0e0e0!important;font-size:.875rem!important;padding:.875rem!important;min-height:130px!important}
+.stTextArea textarea:focus{border-color:#0a84ff!important}
+
+.card{background:#141414;border:1px solid #2a2a2a;border-radius:16px;padding:1.25rem;margin:.5rem 0;text-align:center}
+.card h3{color:#fff;font-size:1.05rem;font-weight:700;margin:0 0 .25rem 0}
+.card p{color:#777;font-size:.8rem;margin:0}
+
+.stTextInput input{background:#141414!important;border:1px solid #2a2a2a!important;border-radius:10px!important;color:#fff!important;padding:.5rem .75rem!important}
+.stTextInput input:focus{border-color:#0a84ff!important}
+
+[data-testid="stInfo"]{background:#0d0d0d;border:1px solid #0a84ff;border-radius:10px;color:#a0c4ff}
+[data-testid="stSpinner"]>div{border-top-color:#0a84ff!important}
+
+.chat-output{background:#0d0d0d;border:1px solid rgba(48,209,88,.3);border-radius:8px;padding:.6rem;font-family:monospace;font-size:.8rem;color:#30d158;white-space:pre-wrap;margin:.5rem 0}
+.chat-error{background:#1a0d0d;border:1px solid rgba(255,69,58,.3);border-radius:8px;padding:.6rem;font-family:monospace;font-size:.8rem;color:#ff453a;white-space:pre-wrap;margin:.5rem 0}
+
+::-webkit-scrollbar{width:5px}
+::-webkit-scrollbar-track{background:#0a0a0a}
+::-webkit-scrollbar-thumb{background:#2a2a2a;border-radius:3px}
+::-webkit-scrollbar-thumb:hover{background:#3a3a3a}
+</style>
+""", unsafe_allow_html=True)
+
+# ============ AUTO SCROLL ============
+st.markdown("""
+<script>
+window.addEventListener('load', function() {
+    setTimeout(function() {
+        window.scrollTo({top: document.body.scrollHeight, behavior: 'smooth'});
+    }, 100);
+});
+</script>
+""", unsafe_allow_html=True)
+
+# ============ API FUNCTIONS ============
 def test_api():
     if not KEY:
         return None, "No API key"
@@ -81,119 +156,79 @@ def test_api():
     return None, "No model"
 
 def ask_ai(msg):
-    """Try multiple formats to get a response."""
     if not KEY:
-        return "No API key"
+        return "No API key found"
     if not st.session_state.model:
         model, _ = test_api()
         if not model:
-            return "No model found"
+            return "No model found. Click Auto-Test."
 
-    # The instructions - short and clear
     instructions = (
         "You are an engineering mentor teaching Topology Optimization. "
-        "Student is a beginner. Show matplotlib code in ```python blocks. "
+        "Student is a beginner. Show matplotlib code in python code blocks. "
         "Never say imagine. Under 100 words. Ask one question then stop. "
-        "NumPy and matplotlib are pre-installed."
+        "NumPy and matplotlib are pre-installed. Code runs automatically."
     )
 
-    # METHOD 1: System + User messages
-    result = try_format_1(instructions, msg)
-    if result:
-        return result
+    for attempt in range(3):
+        # Try Format 1: system + user
+        result = try_call(instructions, msg, use_system=True)
+        if result:
+            return result
 
-    # METHOD 2: Instructions as first user message
-    result = try_format_2(instructions, msg)
-    if result:
-        return result
+        # Try Format 2: no system, instructions as user
+        result = try_call(instructions, msg, use_system=False)
+        if result:
+            return result
 
-    # METHOD 3: Everything in one user message
-    result = try_format_3(instructions, msg)
-    if result:
-        return result
+        time.sleep(1)
 
-    return "ERROR: All methods failed. Click Debug to see details."
+    return "Could not get response. Click Debug for details."
 
-def try_format_1(instructions, msg):
-    """System message + user message."""
+def try_call(instructions, msg, use_system=True):
     try:
         c = OpenAI(api_key=KEY, base_url=API_BASE, timeout=45)
-        chat = [
-            {"role": "system", "content": instructions},
-        ]
-        # Add recent history
+
+        if use_system:
+            chat = [{"role": "system", "content": instructions}]
+        else:
+            chat = [{"role": "user", "content": instructions}]
+
+        if not use_system:
+            chat.append({"role": "assistant", "content": "Understood."})
+
         for x in st.session_state.msgs[-6:]:
             content = x.get("content", "")[:500]
             if content:
                 chat.append({"role": x.get("role", "user"), "content": content})
+
         chat.append({"role": "user", "content": msg[:1000]})
 
         r = c.chat.completions.create(model=st.session_state.model, messages=chat, max_tokens=1500, temperature=0.7)
+
         if r.choices and r.choices[0].message.content:
             reply = r.choices[0].message.content.strip()
             if len(reply) > 3:
-                st.session_state.debug.append("Format 1 worked")
-                return process_reply(reply)
-        st.session_state.debug.append("Format 1: empty or None")
+                if use_system:
+                    st.session_state.debug.append("system format worked")
+                else:
+                    st.session_state.debug.append("user format worked")
+                if "[PRACTICE]" in reply:
+                    match = re.search(r"\[PRACTICE\]\s*(.+)", reply, re.DOTALL)
+                    if match:
+                        st.session_state.task = match.group(1).strip()
+                        st.session_state.editor = True
+                        st.session_state.ran = False
+                return reply
+            else:
+                st.session_state.debug.append(f"format {'system' if use_system else 'user'}: too short")
+        else:
+            st.session_state.debug.append(f"format {'system' if use_system else 'user'}: empty/None")
     except Exception as e:
-        st.session_state.debug.append("Format 1 error: " + str(e)[:50])
+        st.session_state.debug.append(f"format {'system' if use_system else 'user'} error: {str(e)[:40]}")
     return None
 
-def try_format_2(instructions, msg):
-    """Instructions as first user message, then conversation."""
-    try:
-        c = OpenAI(api_key=KEY, base_url=API_BASE, timeout=45)
-        chat = [
-            {"role": "user", "content": instructions},
-            {"role": "assistant", "content": "I understand. I will teach Topology Optimization with visual code examples."},
-        ]
-        # Add recent history
-        for x in st.session_state.msgs[-6:]:
-            content = x.get("content", "")[:500]
-            if content:
-                chat.append({"role": x.get("role", "user"), "content": content})
-        chat.append({"role": "user", "content": msg[:1000]})
-
-        r = c.chat.completions.create(model=st.session_state.model, messages=chat, max_tokens=1500, temperature=0.7)
-        if r.choices and r.choices[0].message.content:
-            reply = r.choices[0].message.content.strip()
-            if len(reply) > 3:
-                st.session_state.debug.append("Format 2 worked")
-                return process_reply(reply)
-        st.session_state.debug.append("Format 2: empty")
-    except Exception as e:
-        st.session_state.debug.append("Format 2 error: " + str(e)[:50])
-    return None
-
-def try_format_3(instructions, msg):
-    """Everything in one message - simplest possible."""
-    try:
-        c = OpenAI(api_key=KEY, base_url=API_BASE, timeout=45)
-        # Just a simple user message with everything included
-        full_msg = instructions + "\n\n" + msg[:500]
-        chat = [{"role": "user", "content": full_msg}]
-
-        r = c.chat.completions.create(model=st.session_state.model, messages=chat, max_tokens=1500, temperature=0.7)
-        if r.choices and r.choices[0].message.content:
-            reply = r.choices[0].message.content.strip()
-            if len(reply) > 3:
-                st.session_state.debug.append("Format 3 worked")
-                return process_reply(reply)
-        st.session_state.debug.append("Format 3: empty")
-    except Exception as e:
-        st.session_state.debug.append("Format 3 error: " + str(e)[:50])
-    return None
-
-def process_reply(reply):
-    """Process the AI reply - extract practice markers."""
-    if "[PRACTICE]" in reply:
-        match = re.search(r"\[PRACTICE\]\s*(.+)", reply, re.DOTALL)
-        if match:
-            st.session_state.task = match.group(1).strip()
-            st.session_state.editor = True
-            st.session_state.ran = False
-    return reply
-
+# ============ CODE EXECUTION ============
 def run_code(code):
     if not code:
         return "", "No code", None
@@ -256,50 +291,20 @@ def remove_code(text, blocks):
     text = re.sub(r"```\s*\n.*?```", "", text, flags=re.DOTALL)
     return text.strip()
 
-st.set_page_config(page_title="Studio", layout="centered")
+# ============ HEADER (Fixed) ============
+st.markdown('<div class="header-fix">', unsafe_allow_html=True)
 
-st.markdown("""
-<style>
-html,body{margin:0;padding:0;height:100vh;overflow:hidden;background:#0a0a0a;color:#fff;font-family:-apple-system,sans-serif}
-.stApp{height:100vh;overflow:hidden}
-#MainMenu,footer,header,[data-testid="stSidebar"],[data-testid="stToolbar"]{display:none!important}
-.block-container{max-width:720px;height:100vh;display:flex;flex-direction:column;overflow:hidden;padding:0!important;margin:0 auto}
-[data-testid="stChatMessage"]{background:transparent;border:none;padding:.25rem 0;margin:0}
-[data-testid="stChatMessageAvatar"]{display:none}
-[data-testid="stChatMessageContent"]{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:16px;border-bottom-left-radius:4px;padding:.75rem 1rem;font-size:.9rem;line-height:1.6;color:#e0e0e0}
-[data-testid="stChatMessage"] pre{background:#0a0a0a!important;border:1px solid #2a2a2a;border-radius:8px;padding:.75rem;font-size:.8rem}
-[data-testid="stChatMessage"] code{background:#2a2a2a;color:#7dd3fc;padding:1px 5px;border-radius:4px;font-size:.85em}
-[data-testid="stChatMessage"] pre code{background:transparent;padding:0;color:inherit}
-[data-testid="stChatInput"] textarea{background:#141414!important;border:1px solid #333!important;border-radius:18px!important;color:#fff!important;font-size:.95rem!important;padding:.875rem 1.125rem!important;min-height:48px!important}
-[data-testid="stChatInput"] textarea:focus{border-color:#0a84ff!important}
-.stButton>button{background:#0a84ff;color:#fff;border:none;border-radius:10px;padding:.6rem 1.2rem;font-weight:600;font-size:.875rem;width:100%}
-.stButton>button:hover{background:#409cff}
-.stButton>button[key="reset_top"]{background:transparent;color:#666;border:1px solid #2a2a2a;border-radius:8px;padding:.375rem .75rem;font-size:.75rem;width:auto}
-.stButton>button[key="reset_top"]:hover{color:#ff453a;border-color:#ff453a}
-.stButton>button[key="debug_btn"]{background:transparent;color:#888;border:1px solid #2a2a2a;border-radius:8px;padding:.375rem .75rem;font-size:.75rem;width:auto}
-.stTextArea textarea{background:#0a0a0a!important;border:1px solid #2a2a2a!important;border-radius:12px!important;font-family:monospace!important;color:#e0e0e0!important;font-size:.875rem!important;padding:.875rem!important;min-height:130px!important}
-.card{background:#141414;border:1px solid #2a2a2a;border-radius:16px;padding:1.25rem;margin:.5rem 0;text-align:center}
-.card h3{color:#fff;font-size:1.05rem;font-weight:700;margin:0 0 .25rem 0}
-.card p{color:#777;font-size:.8rem;margin:0}
-.stTextInput input{background:#141414!important;border:1px solid #2a2a2a!important;border-radius:10px!important;color:#fff!important;padding:.5rem .75rem!important}
-[data-testid="stInfo"]{background:#0d0d0d;border:1px solid #0a84ff;border-radius:10px;color:#a0c4ff}
-[data-testid="stSpinner"]>div{border-top-color:#0a84ff!important}
-.chat-output{background:#0d0d0d;border:1px solid rgba(48,209,88,.3);border-radius:8px;padding:.6rem;font-family:monospace;font-size:.8rem;color:#30d158;white-space:pre-wrap;margin:.5rem 0}
-.chat-error{background:#1a0d0d;border:1px solid rgba(255,69,58,.3);border-radius:8px;padding:.6rem;font-family:monospace;font-size:.8rem;color:#ff453a;white-space:pre-wrap;margin:.5rem 0}
-</style>
-""", unsafe_allow_html=True)
-
-# ============ HEADER ============
-h1_col, h2_col, h3_col = st.columns([3, 1, 1])
-with h1_col:
-    st.markdown('<h1 style="font-size:1.5rem;font-weight:800;letter-spacing:-.04em;margin:0;color:#fff;">Studio.</h1>', unsafe_allow_html=True)
-with h2_col:
+h1, h2, h3 = st.columns([3, 1, 1])
+with h1:
+    st.markdown('<h1 style="font-size:1.4rem;font-weight:800;letter-spacing:-.04em;margin:0;color:#fff;">Studio.</h1>', unsafe_allow_html=True)
+with h2:
     if st.button("Debug", key="debug_btn"):
         if st.session_state.debug:
-            st.write("\n".join(st.session_state.debug))
+            for d in st.session_state.debug[-5:]:
+                st.text(d)
         else:
-            st.write("No debug info yet")
-with h3_col:
+            st.text("No debug info yet")
+with h3:
     if st.button("Reset", key="reset_top"):
         st.session_state.msgs = []
         st.session_state.editor = False
@@ -317,7 +322,9 @@ with h3_col:
         st.rerun()
 
 if st.session_state.model:
-    st.markdown('<p style="color:#30d158;font-size:.65rem;text-align:center;margin:.25rem 0 0 0;">' + st.session_state.model + '</p>', unsafe_allow_html=True)
+    st.markdown('<p style="color:#30d158;font-size:.6rem;text-align:center;margin:.1rem 0 0 0;">' + st.session_state.model + '</p>', unsafe_allow_html=True)
+
+st.markdown('</div>', unsafe_allow_html=True)
 
 # ============ MODEL SETUP ============
 if not st.session_state.tested:
@@ -336,16 +343,19 @@ if not st.session_state.tested:
         if model:
             st.session_state.tested = True
             st.rerun()
+        else:
+            st.error(status)
 
-# ============ START ============
+# ============ START SCREEN ============
 if len(st.session_state.msgs) == 0 and st.session_state.tested:
-    st.markdown('<div class="card"><h3>Topology Optimization</h3><p>Build a structural solver</p></div>', unsafe_allow_html=True)
+    st.markdown('<div class="card"><h3>Topology Optimization</h3><p>Build a structural solver from scratch</p></div>', unsafe_allow_html=True)
     if st.button("Start Topology Optimization", type="primary"):
         st.session_state.start = "topo"
-    st.markdown('<div class="card"><h3>System Design</h3><p>Design real systems</p></div>', unsafe_allow_html=True)
+    st.markdown('<div class="card"><h3>System Design</h3><p>Design and build real systems</p></div>', unsafe_allow_html=True)
     if st.button("Start System Design", type="primary"):
         st.session_state.start = "sys"
 
+# ============ HANDLE START ============
 if st.session_state.start:
     track = st.session_state.start
     st.session_state.start = None
@@ -359,7 +369,7 @@ if st.session_state.start:
     save()
     st.rerun()
 
-# ============ CHAT ============
+# ============ CHAT DISPLAY ============
 for msg_idx, m in enumerate(st.session_state.msgs):
     role = m.get("role", "user")
     content = m.get("content", "")
@@ -371,6 +381,7 @@ for msg_idx, m in enumerate(st.session_state.msgs):
             with c:
                 with st.chat_message("user"):
                     st.write(text)
+
     else:
         code_blocks = find_code(content)
         text = clean(content)
@@ -378,10 +389,12 @@ for msg_idx, m in enumerate(st.session_state.msgs):
 
         c, _ = st.columns([0.78, 0.22])
         with c:
+            # Show text
             if text:
                 with st.chat_message("assistant"):
                     st.write(text)
 
+            # Execute and show plots inline
             for code in code_blocks:
                 with st.chat_message("assistant"):
                     out, err, fig = run_code(code)
@@ -440,7 +453,7 @@ for msg_idx, m in enumerate(st.session_state.msgs):
                     if st.session_state.plot is not None:
                         st.pyplot(st.session_state.plot, use_container_width=True)
 
-# ============ INPUT ============
+# ============ CHAT INPUT ============
 if len(st.session_state.msgs) > 0:
     if msg := st.chat_input("Type your answer..."):
         st.session_state.msgs.append({"role": "user", "content": msg})
