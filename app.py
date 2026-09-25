@@ -5,361 +5,566 @@ import io
 import sys
 import contextlib
 import traceback
-import json
 import time
+import re
+import base64
 
 # ============ CONFIG ============
 API_BASE_URL = "https://api.stepfun.ai/step_plan/v1"
 MODEL_NAME = "step-5-preview"
 
 # ============ SESSION STATE ============
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-if "pending_start" not in st.session_state:
-    st.session_state.pending_start = None
-if "code_history" not in st.session_state:
-    st.session_state.code_history = []
-if "user_language" not in st.session_state:
-    st.session_state.user_language = None
-if "user_level" not in st.session_state:
-    st.session_state.user_level = "absolute_beginner"
-if "current_project" not in st.session_state:
-    st.session_state.current_project = None
-if "code_editor_content" not in st.session_state:
-    st.session_state.code_editor_content = "# Write your code here\nprint('Hello, World!')"
-if "code_output" not in st.session_state:
-    st.session_state.code_output = ""
-if "code_error" not in st.session_state:
-    st.session_state.code_error = ""
+def init_state():
+    defaults = {
+        "messages": [],
+        "pending_start": None,
+        "show_code_editor": False,
+        "code_exercise": "",
+        "code_content": "# Type your code here\n",
+        "code_output": "",
+        "code_error": "",
+        "code_ran": False,
+        "current_plot": None,
+        "has_plot": False,
+        "show_quiz": False,
+        "quiz_question": "",
+        "quiz_options": [],
+        "concepts_learned": [],
+        "exercises_completed": 0,
+    }
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
+
+init_state()
 
 # ============ API KEY ============
 API_KEY = st.secrets.get("STEPFUN_API_KEY", os.environ.get("STEPFUN_API_KEY", ""))
 
-# ============ MENTOR BRAIN (Complete Curriculum System) ============
+# ============ MENTOR SYSTEM PROMPT ============
 MENTOR_PROMPT = """
-You are an expert engineering mentor inside an interactive learning platform. Your student has ZERO coding experience but wants to learn through building real projects. You teach EVERYTHING — from absolute basics to advanced concepts — adapted to their chosen language.
+You are an expert mentor in an interactive learning platform. Your student has ZERO coding experience. You teach everything from absolute basics to advanced engineering, project-driven.
 
-## YOUR FIRST TASK (Always do this at session start)
-1. Greet the student warmly
-2. Ask which programming language they want to learn (Python is recommended for beginners)
-3. Ask what project interests them most
-4. Assess their current knowledge (they said they know NOTHING, so start from zero)
-5. Create a personalized learning path
+## CONTROLLING THE PLATFORM
 
-## CURRICULUM DESIGN PRINCIPLES
-- Project-driven: every concept is learned because the project needs it
-- Just-in-time: teach concepts only when they're about to use them
-- Scaffolded: start simple, add complexity gradually
-- Hands-on: the student writes code after every concept
-- Reviewed: you check their code like a senior engineer would
-- Visualized: use the built-in sandbox to show plots and diagrams
+You control what the student sees. Use these markers:
 
-## THE LEARNING CYCLE (repeat for each concept)
-1. **Context**: "We need X for our project because..."
-2. **Explanation**: Simple, clear explanation with analogy
-3. **Example**: Show code in the chat
-4. **Exercise**: "Now you try — write code that does..."
-5. **Review**: Check their output, give feedback
-6. **Apply**: Use the concept in the actual project
+**[PRACTICE]** — Shows a code editor. Format:
+End your message with [PRACTICE] followed by a clear, single-task exercise.
+Example: [PRACTICE] Create a variable called name, assign your name to it, then print it.
 
-## CODE SANDBOX INSTRUCTIONS
-When you want the student to write and run code:
-- Provide the exercise clearly
-- Tell them to use the "Code Sandbox" tab
-- After they run it, review their output in the chat
-- If there's an error, help them debug (don't just fix it for them)
+**[QUIZ]** — Shows interactive quiz buttons. Format:
+[QUIZ] What does print() do? | Displays text | Deletes files | Creates variables | Nothing
 
-## LANGUAGE-SPECIFIC TRACKS
+**[VISUAL]** — Tells the student to run code that creates a plot. Use when teaching concepts that benefit from visualization.
 
-### If they choose Python:
-Week 1-2: print, variables, math, strings, input
-Week 3-4: lists, loops, conditionals
-Week 5-6: functions, dictionaries, file I/O
-Week 7-8: error handling, modules, libraries
-Week 9+: NumPy, matplotlib (for topology optimization)
-Week 12+: Full project implementation
+Use markers ONLY when practice or checking is needed. Otherwise just explain.
 
-### If they choose JavaScript:
-Adapt the same progression to JS syntax and concepts.
+## TEACHING FLOW (per concept)
 
-### If they choose another language:
-Adapt accordingly, always project-driven.
+1. **Introduce**: Why this concept matters for the project
+2. **Explain**: Simple, clear explanation with analogy  
+3. **Show**: Code example in the chat
+4. **Practice**: [PRACTICE] exercise for the student
+5. **Review**: When they submit code, review it: what's good, what to fix, then move forward
+6. **Quiz** (occasionally): [QUIZ] to check understanding
 
-## PROJECT TRACKS
+## CURRICULUM — START FROM ZERO
 
-### Track 1: Topology Optimization
-For students interested in structural engineering:
-- Build a SIMP-based topology optimizer
-- Learn Python → NumPy → FEA basics → optimization
-- Visualize structures using the sandbox
-- Final deliverable: a working solver
+The student knows NOTHING. Begin with:
+- What is a program? What is Python?
+- print() — the simplest possible program
+- Variables — storing information
+- Then progressively: math, strings, lists, loops, functions, etc.
 
-### Track 2: System Design
-For students interested in architecture:
-- Build real systems (start with a URL shortener)
-- Learn requirements → architecture → implementation
-- Use diagrams in the visualization sandbox
-- Final deliverable: a complete system they designed
+Every concept must connect to the project they're building toward.
 
-### Track 3: Custom Project
-For students with their own ideas:
-- Understand their goal
-- Break it into learnable components
-- Guide them through building it step by step
+## WHEN REVIEWING CODE
 
-## TEACHING STYLE
-- Be encouraging but rigorous
-- Use analogies from everyday life
-- Show code examples that RUN (they can test in sandbox)
-- When reviewing code: what's good, what to improve, what to fix
-- If they're stuck: give a smaller version of the problem
-- Celebrate their progress
-- Keep momentum — always end with a clear next step
+- Start with what they did RIGHT (be specific)
+- Then identify issues (gently, clearly)
+- If there's an error, explain what the error MEANS
+- Give them a chance to fix it themselves before showing the answer
+- If they're really stuck, provide the corrected code with explanation
 
-## SESSION CONTINUITY
-- Remember what was taught in previous exchanges
-- Reference earlier concepts when relevant
-- Track progress and mention milestones
-- Suggest review of earlier material if needed
+## SESSION START
 
-## FORMAT YOUR RESPONSES
-- Use clear headers
-- Use code blocks for code examples
-- Use bullet points for lists
-- Keep explanations concise but complete
-- End with a clear action for the student
+Greet warmly. Ask:
+1. What are you excited to build?
+2. Confirm Python (best for beginners)
+Then immediately start with lesson 1: what is a program, and print().
+
+## STYLE
+- Encouraging but rigorous
+- One concept at a time — don't overwhelm
+- Use everyday analogies
+- Code examples that actually work
+- Short messages (100-200 words) — don't lecture
+- Always end with a clear next action
+
+## IMPORTANT
+- Never skip basics assuming they know something
+- If they mention knowing something, verify with a quick question
+- Track what's been learned and reference it
+- If they struggle, simplify — don't skip
 """
 
 # ============ PAGE SETUP ============
 st.set_page_config(
     page_title="Studio — Learn Everything",
     page_icon="🎓",
-    layout="wide",
+    layout="centered",
     initial_sidebar_state="collapsed"
 )
 
-# ============ APPLE HIG DARK MODE CSS ============
+# ============ PREMIUM DARK MODE CSS ============
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
-    
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+    /* ============ BASE ============ */
     .stApp {
-        background-color: #000000;
-        color: #FFFFFF;
-        font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Inter', sans-serif;
+        background: #0A0A0A;
+        color: #F5F5F5;
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif;
         -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
     }
-    
+
     #MainMenu, footer, header { visibility: hidden; }
     [data-testid="stSidebar"] { display: none !important; }
-    
-    .main-header {
+    [data-testid="stToolbar"] { display: none !important; }
+
+    .block-container {
+        padding-top: 0;
+        padding-bottom: 0;
+        max-width: 720px;
+        padding-left: 1rem;
+        padding-right: 1rem;
+    }
+
+    /* ============ HEADER ============ */
+    .app-header {
         text-align: center;
-        padding: 0.5rem 0 1.5rem 0;
+        padding: 2.5rem 0 1.5rem 0;
+        border-bottom: 1px solid #1A1A1A;
+        margin-bottom: 0;
     }
-    
-    .main-header h1 {
+
+    .app-header h1 {
         font-size: 2.5rem;
-        font-weight: 700;
-        letter-spacing: -0.04em;
-        color: #FFFFFF;
+        font-weight: 800;
+        letter-spacing: -0.05em;
+        color: #F5F5F5;
         margin: 0;
+        line-height: 1;
     }
-    
-    .main-header p {
-        font-size: 1rem;
-        color: #8E8E93;
+
+    .app-header .tagline {
+        font-size: 0.875rem;
+        color: #6E6E73;
         font-weight: 400;
-        margin-top: 0.3rem;
+        margin-top: 0.5rem;
+        letter-spacing: -0.01em;
     }
-    
-    /* Project cards */
-    .stButton > button {
-        background: linear-gradient(180deg, #1C1C1E 0%, #2C2C2E 100%);
-        color: #FFFFFF;
-        border: 1px solid #3A3A3C;
-        border-radius: 16px;
-        padding: 1rem 1.25rem;
-        font-weight: 500;
-        font-size: 0.9rem;
-        font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-        width: 100%;
-        height: auto;
-        transition: all 0.2s;
-        text-align: left;
-        line-height: 1.4;
-        margin-bottom: 0.5rem;
-    }
-    
-    .stButton > button:hover {
-        background: linear-gradient(180deg, #2C2C2E 0%, #3A3A3C 100%);
-        border-color: #0A84FF;
-    }
-    
-    /* Chat */
+
+    /* ============ CHAT ============ */
     [data-testid="stChatMessage"] {
         background: transparent;
         border: none;
-        padding: 0.5rem 0;
+        padding: 0.375rem 0;
+        margin: 0;
     }
-    
+
     [data-testid="stChatMessageContent"] {
-        font-size: 0.95rem;
-        line-height: 1.6;
+        font-size: 0.9375rem;
+        line-height: 1.7;
+        color: #F5F5F5;
+        font-weight: 400;
+        letter-spacing: -0.01em;
+    }
+
+    [data-testid="stChatMessage"] p {
+        margin-bottom: 0.75rem;
+    }
+
+    [data-testid="stChatMessage"] strong {
+        font-weight: 600;
         color: #FFFFFF;
     }
-    
+
+    /* Code blocks in chat */
     [data-testid="stChatMessage"] pre {
-        background: #1C1C1E;
-        border: 1px solid #3A3A3C;
-        border-radius: 12px;
-        padding: 1rem;
-        font-size: 0.85rem;
+        background: #141414;
+        border: 1px solid #262626;
+        border-radius: 10px;
+        padding: 1rem 1.25rem;
+        font-size: 0.8125rem;
         font-family: 'JetBrains Mono', 'SF Mono', monospace;
+        line-height: 1.6;
+        color: #E0E0E0;
+        overflow-x: auto;
     }
-    
+
     [data-testid="stChatMessage"] code {
-        background: #2C2C2E;
-        color: #0A84FF;
-        padding: 0.125rem 0.375rem;
-        border-radius: 6px;
-        font-family: 'JetBrains Mono', 'SF Mono', monospace;
-        font-size: 0.875em;
+        background: #1E1E1E;
+        color: #7DD3FC;
+        padding: 2px 7px;
+        border-radius: 5px;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.85em;
+        border: 1px solid #2A2A2A;
     }
-    
-    /* Chat input */
+
+    [data-testid="stChatMessage"] pre code {
+        background: transparent;
+        border: none;
+        padding: 0;
+        color: inherit;
+        font-size: inherit;
+    }
+
+    /* Headers in chat */
+    [data-testid="stChatMessage"] h1,
+    [data-testid="stChatMessage"] h2,
+    [data-testid="stChatMessage"] h3 {
+        color: #F5F5F5;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+        margin-top: 1.25rem;
+        margin-bottom: 0.5rem;
+    }
+
+    [data-testid="stChatMessage"] h1 { font-size: 1.375rem; }
+    [data-testid="stChatMessage"] h2 { font-size: 1.1875rem; }
+    [data-testid="stChatMessage"] h3 { font-size: 1rem; }
+
+    /* Lists */
+    [data-testid="stChatMessage"] ul,
+    [data-testid="stChatMessage"] ol {
+        padding-left: 1.25rem;
+        margin: 0.5rem 0;
+    }
+
+    [data-testid="stChatMessage"] li {
+        margin-bottom: 0.375rem;
+        color: #D0D0D0;
+    }
+
+    /* Blockquotes */
+    [data-testid="stChatMessage"] blockquote {
+        border-left: 3px solid #0A84FF;
+        padding-left: 1rem;
+        margin: 0.75rem 0;
+        color: #A0A0A5;
+        font-style: italic;
+    }
+
+    /* ============ CHAT INPUT ============ */
+    [data-testid="stChatInput"] {
+        position: sticky;
+        bottom: 0;
+        padding: 1rem 0;
+        background: linear-gradient(to bottom, transparent, #0A0A0A 80%);
+    }
+
     [data-testid="stChatInput"] textarea {
-        background: #1C1C1E !important;
-        border: 1px solid #3A3A3C !important;
-        border-radius: 22px !important;
-        font-family: -apple-system, sans-serif !important;
-        color: #FFFFFF !important;
-        font-size: 1rem !important;
-        padding: 0.875rem 1.25rem !important;
+        background: #141414 !important;
+        border: 1px solid #2A2A2A !important;
+        border-radius: 18px !important;
+        color: #F5F5F5 !important;
+        font-size: 0.9375rem !important;
+        font-family: 'Inter', sans-serif !important;
+        padding: 0.75rem 1.25rem !important;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.3) !important;
+        transition: all 0.15s ease !important;
     }
-    
+
     [data-testid="stChatInput"] textarea:focus {
         border-color: #0A84FF !important;
-        background: #2C2C2E !important;
+        background: #1A1A1A !important;
+        box-shadow: 0 0 0 3px rgba(10,132,255,0.15), 0 2px 8px rgba(0,0,0,0.3) !important;
     }
-    
-    /* Code editor */
+
+    [data-testid="stChatInput"] textarea::placeholder {
+        color: #48484A !important;
+    }
+
+    /* ============ CODE EDITOR ============ */
+    .code-section {
+        background: #0D0D0D;
+        border: 1px solid #1E1E1E;
+        border-radius: 16px;
+        margin: 1.5rem 0;
+        overflow: hidden;
+    }
+
+    .code-section-header {
+        background: #141414;
+        border-bottom: 1px solid #1E1E1E;
+        padding: 0.75rem 1.25rem;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+    }
+
+    .code-section-header .label {
+        font-size: 0.75rem;
+        font-weight: 600;
+        color: #0A84FF;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+    }
+
+    .code-section-header .lang {
+        font-size: 0.75rem;
+        color: #48484A;
+        font-family: 'JetBrains Mono', monospace;
+    }
+
     .stTextArea textarea {
-        background: #1C1C1E !important;
-        border: 1px solid #3A3A3C !important;
-        border-radius: 12px !important;
-        font-family: 'JetBrains Mono', 'SF Mono', monospace !important;
-        color: #FFFFFF !important;
+        background: #0A0A0A !important;
+        border: none !important;
+        border-radius: 0 !important;
+        font-family: 'JetBrains Mono', monospace !important;
+        color: #E0E0E0 !important;
         font-size: 0.875rem !important;
-        line-height: 1.5 !important;
-        padding: 1rem !important;
+        line-height: 1.7 !important;
+        padding: 1rem 1.25rem !important;
+        min-height: 180px !important;
     }
-    
+
     .stTextArea textarea:focus {
-        border-color: #0A84FF !important;
+        background: #0A0A0A !important;
     }
-    
-    /* Tabs */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 0.5rem;
-        background: transparent;
-        border-bottom: 1px solid #3A3A3C;
+
+    .stTextArea textarea::placeholder {
+        color: #333333 !important;
     }
-    
-    .stTabs [data-baseweb="tab"] {
-        background: transparent;
-        color: #8E8E93;
-        border: none;
-        border-radius: 8px;
-        padding: 0.5rem 1rem;
-        font-weight: 500;
-        font-size: 0.875rem;
-    }
-    
-    .stTabs [data-baseweb="tab"]:hover {
-        color: #FFFFFF;
-        background: #1C1C1E;
-    }
-    
-    .stTabs [aria-selected="true"] {
-        background: #1C1C1E !important;
-        color: #0A84FF !important;
-    }
-    
-    /* Output boxes */
-    .output-box {
-        background: #1C1C1E;
-        border: 1px solid #3A3A3C;
-        border-radius: 12px;
-        padding: 1rem;
-        margin-top: 0.5rem;
+
+    /* ============ OUTPUT ============ */
+    .output-section {
+        background: #0D0D0D;
+        border-top: 1px solid #1E1E1E;
+        padding: 1rem 1.25rem;
         font-family: 'JetBrains Mono', monospace;
-        font-size: 0.85rem;
-        color: #FFFFFF;
-        white-space: pre-wrap;
+        font-size: 0.8125rem;
+        line-height: 1.6;
     }
-    
-    .error-box {
-        background: #2C1C1C;
-        border: 1px solid #FF453A;
-        border-radius: 12px;
-        padding: 1rem;
-        margin-top: 0.5rem;
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 0.85rem;
+
+    .output-label {
+        font-size: 0.6875rem;
+        font-weight: 600;
+        color: #30D158;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        margin-bottom: 0.5rem;
+    }
+
+    .output-label.error {
         color: #FF453A;
+    }
+
+    .output-content {
+        color: #30D158;
         white-space: pre-wrap;
     }
-    
-    /* Info callouts */
-    .stInfo {
-        background: #1C1C1E;
-        border: 1px solid #0A84FF;
-        border-radius: 12px;
+
+    .output-content.error {
+        color: #FF453A;
     }
-    
-    /* Success */
-    .stSuccess {
-        background: #1C1C1E;
-        border: 1px solid #30D158;
+
+    /* ============ BUTTONS ============ */
+    .stButton > button {
+        background: #0A84FF;
+        color: #FFFFFF;
+        border: none;
         border-radius: 12px;
+        padding: 0.625rem 1.5rem;
+        font-weight: 600;
+        font-size: 0.875rem;
+        font-family: 'Inter', sans-serif;
+        letter-spacing: -0.01em;
+        transition: all 0.15s ease;
+        box-shadow: 0 2px 8px rgba(10,132,255,0.3);
     }
-    
-    /* Warning */
-    .stWarning {
-        background: #1C1C1E;
-        border: 1px solid #FFD60A;
-        border-radius: 12px;
+
+    .stButton > button:hover {
+        background: #409CFF;
+        box-shadow: 0 4px 16px rgba(10,132,255,0.4);
+        transform: translateY(-1px);
     }
-    
-    /* Divider */
+
+    .stButton > button:active {
+        transform: translateY(0);
+    }
+
+    .stButton > button[kind="secondary"] {
+        background: #1E1E1E;
+        color: #A0A0A5;
+        border: 1px solid #2A2A2A;
+        box-shadow: none;
+    }
+
+    .stButton > button[kind="secondary"]:hover {
+        background: #2A2A2A;
+        color: #F5F5F5;
+        border-color: #3A3A3A;
+    }
+
+    /* ============ QUIZ ============ */
+    .quiz-section {
+        background: #0D0D0D;
+        border: 1px solid #1E1E1E;
+        border-radius: 16px;
+        margin: 1.5rem 0;
+        padding: 1.25rem;
+    }
+
+    .quiz-question {
+        font-size: 1rem;
+        font-weight: 600;
+        color: #F5F5F5;
+        margin-bottom: 1rem;
+    }
+
+    /* ============ MISC ============ */
+    [data-testid="stSpinner"] > div {
+        border-top-color: #0A84FF !important;
+    }
+
     hr {
         border: none;
         height: 1px;
-        background: #3A3A3C;
-        margin: 1.5rem auto;
+        background: #1A1A1A;
+        margin: 1.5rem 0;
     }
-    
-    /* Caption */
+
     .stCaption {
-        color: #48484A;
+        color: #3A3A3C;
+        font-size: 0.75rem;
+    }
+
+    .stInfo {
+        background: #0D0D0D;
+        border: 1px solid #0A84FF;
+        border-radius: 12px;
+        color: #A0C4FF;
+    }
+
+    .stWarning {
+        background: #1A1A0D;
+        border: 1px solid #FFD60A;
+        border-radius: 12px;
+        color: #FFD60A;
+    }
+
+    /* Progress indicator */
+    .progress-bar {
+        background: #1A1A1A;
+        border-radius: 8px;
+        padding: 0.5rem 1rem;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        font-size: 0.75rem;
+        color: #6E6E73;
+        margin-bottom: 1rem;
+    }
+
+    .progress-stat {
+        font-weight: 600;
+        color: #0A84FF;
+    }
+
+    /* Animated typing indicator */
+    .typing-indicator {
+        display: flex;
+        gap: 4px;
+        padding: 0.5rem 0;
+    }
+
+    .typing-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #0A84FF;
+        opacity: 0.3;
+        animation: typing 1.4s infinite;
+    }
+
+    .typing-dot:nth-child(2) { animation-delay: 0.2s; }
+    .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+
+    @keyframes typing {
+        0%, 60%, 100% { opacity: 0.3; transform: scale(1); }
+        30% { opacity: 1; transform: scale(1.1); }
+    }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar {
+        width: 6px;
+    }
+
+    ::-webkit-scrollbar-track {
+        background: #0A0A0A;
+    }
+
+    ::-webkit-scrollbar-thumb {
+        background: #2A2A2A;
+        border-radius: 3px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+        background: #3A3A3A;
+    }
+
+    /* Expander */
+    .streamlit-expanderHeader {
+        background: #141414;
+        color: #A0A0A5;
+        border: 1px solid #2A2A2A;
+        border-radius: 10px;
+        font-size: 0.875rem;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# ============ FUNCTION: EXECUTE CODE ============
+# ============ PARSE AI MARKERS ============
+def parse_ai_response(text):
+    """Detect markers in AI response and set up UI elements."""
+    
+    if "[PRACTICE]" in text:
+        match = re.search(r'\[PRACTICE\]\s*(.+)', text, re.DOTALL)
+        if match:
+            st.session_state.show_code_editor = True
+            st.session_state.code_exercise = match.group(1).strip()
+            st.session_state.code_ran = False
+            st.session_state.code_output = ""
+            st.session_state.code_error = ""
+            st.session_state.has_plot = False
+            st.session_state.current_plot = None
+    
+    if "[QUIZ]" in text:
+        match = re.search(r'\[QUIZ\]\s*(.+)', text)
+        if match:
+            parts = text.split("[QUIZ]")[1].split("|")
+            st.session_state.show_quiz = True
+            st.session_state.quiz_question = parts[0].strip()
+            st.session_state.quiz_options = [p.strip() for p in parts[1:] if p.strip()]
+
+# ============ EXECUTE CODE ============
 def execute_code(code):
-    """Execute Python code and return output and errors."""
+    """Execute Python code, capture output, errors, and matplotlib figures."""
     
     old_stdout = sys.stdout
     old_stderr = sys.stderr
-    redirected_output = io.StringIO()
-    redirected_error = io.StringIO()
+    stdout_capture = io.StringIO()
+    stderr_capture = io.StringIO()
     
-    # Create a namespace for execution
     namespace = {"__name__": "__main__"}
     
-    # Add common imports for convenience
+    # Pre-import useful libraries
     try:
         import numpy as np
         namespace['np'] = np
@@ -371,52 +576,56 @@ def execute_code(code):
     except:
         pass
     
-    start_time = time.time()
+    # Set up matplotlib for headless operation
+    try:
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        namespace['plt'] = plt
+        namespace['matplotlib'] = matplotlib
+    except:
+        pass
     
     try:
-        with contextlib.redirect_stdout(redirected_output):
-            with contextlib.redirect_stderr(redirected_error):
+        with contextlib.redirect_stdout(stdout_capture):
+            with contextlib.redirect_stderr(stderr_capture):
                 exec(code, namespace)
         
-        output = redirected_output.getvalue()
-        error = redirected_error.getvalue()
-        execution_time = time.time() - start_time
+        output = stdout_capture.getvalue()
+        error = stderr_capture.getvalue()
         
-        # Check if matplotlib was used
+        # Check for matplotlib figures
         has_figure = False
+        figure = None
         try:
-            import matplotlib
-            matplotlib.use('Agg')
-            import matplotlib.pyplot as plt
-            if plt.get_fignums():
-                has_figure = True
+            if 'plt' in namespace:
+                nums = plt.get_fignums()
+                if nums:
+                    has_figure = True
+                    figure = plt.figure(nums[0])
         except:
             pass
         
-        return output, error, execution_time, has_figure
+        return output, error, has_figure, figure
         
     except Exception as e:
-        output = redirected_output.getvalue()
-        error = traceback.format_exc()
-        execution_time = time.time() - start_time
-        return output, error, execution_time, False
+        output = stdout_capture.getvalue()
+        tb = traceback.format_exc()
+        return output, tb, False, None
     
     finally:
         sys.stdout = old_stdout
         sys.stderr = old_stderr
 
-# ============ FUNCTION: GET AI RESPONSE ============
-def get_ai_response(user_message):
-    """Send message to StepFun API and return response."""
+# ============ STREAMING AI RESPONSE ============
+def get_ai_response_streaming(user_message, display_placeholder=None):
+    """Get streaming response from StepFun API."""
     
     if not API_KEY:
         return "⚠️ **Setup needed.** Add your API key in Streamlit Cloud → Settings → Secrets"
     
     try:
-        client = OpenAI(
-            api_key=API_KEY,
-            base_url=API_BASE_URL
-        )
+        client = OpenAI(api_key=API_KEY, base_url=API_BASE_URL)
         
         api_messages = [{"role": "system", "content": MENTOR_PROMPT}]
         
@@ -428,258 +637,300 @@ def get_ai_response(user_message):
         
         api_messages.append({"role": "user", "content": user_message})
         
-        response = client.chat.completions.create(
+        # Streaming
+        stream = client.chat.completions.create(
             model=MODEL_NAME,
             messages=api_messages,
+            stream=True,
             max_tokens=4000,
             temperature=0.6
         )
         
-        return response.choices[0].message.content
+        full_response = ""
+        
+        if display_placeholder:
+            for chunk in stream:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    full_response += chunk.choices[0].delta.content
+                    # Clean markers for display
+                    clean = re.sub(r'\[PRACTICE\].*', '', full_response, flags=re.DOTALL)
+                    clean = re.sub(r'\[QUIZ\].*', '', clean, flags=re.DOTALL)
+                    display_placeholder.markdown(clean + "▌")
+            
+            # Final clean version
+            clean = re.sub(r'\[PRACTICE\].*', '', full_response, flags=re.DOTALL)
+            clean = re.sub(r'\[QUIZ\].*', '', clean, flags=re.DOTALL)
+            display_placeholder.markdown(clean)
+        else:
+            for chunk in stream:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    full_response += chunk.choices[0].delta.content
+        
+        # Parse for markers
+        parse_ai_response(full_response)
+        
+        # Track concepts
+        if "variable" in full_response.lower():
+            if "variables" not in st.session_state.concepts_learned:
+                st.session_state.concepts_learned.append("variables")
+        
+        return full_response
         
     except Exception as e:
         error_msg = str(e)
         if "401" in error_msg:
-            return "❌ Invalid API key."
+            return "❌ **Invalid API key.** Check your Streamlit Cloud secrets."
         elif "404" in error_msg:
-            return "❌ Model not found. Try 'step-1-8k'."
+            return "❌ **Model not found.** The model might not be available on your key."
+        elif "429" in error_msg:
+            return "⏳ **Rate limit.** Please wait a moment and try again."
         else:
-            return f"❌ Error: {error_msg[:150]}"
+            return f"❌ **Error:** {error_msg[:100]}"
+
+# ============ DISPLAY MESSAGE (Clean) ============
+def display_message(content, role):
+    """Display a message, removing internal markers."""
+    clean = re.sub(r'\[PRACTICE\].*', '', content, flags=re.DOTALL)
+    clean = re.sub(r'\[QUIZ\].*', '', clean, flags=re.DOTALL)
+    with st.chat_message(role):
+        st.write(clean)
 
 # ============ HEADER ============
 st.markdown("""
-<div class="main-header">
+<div class="app-header">
     <h1>Studio.</h1>
-    <p>Learn to code. Build real projects. Everything included.</p>
+    <p class="tagline">Learn to code. Build real projects.</p>
 </div>
 """, unsafe_allow_html=True)
 
-# ============ PROJECT SELECTION ============
+# ============ START SCREEN ============
 if len(st.session_state.messages) == 0 and not st.session_state.pending_start:
     
     st.write("")
-    st.markdown("##### Start your learning journey:")
-    st.write("")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        if st.button(
-            "🏗️\n\n**Topology Optimization**\n\nLearn Python + engineering. Build a structural solver from zero.",
-            use_container_width=True
-        ):
-            st.session_state.pending_start = "I want to learn everything from absolute zero and eventually build a topology optimization solver. I have no coding experience. Please create a learning plan for me and start with the very first lesson."
-            st.rerun()
-    
-    with col2:
-        if st.button(
-            "📐\n\n**System Design**\n\nLearn coding + architecture. Build real systems from scratch.",
-            use_container_width=True
-        ):
-            st.session_state.pending_start = "I want to learn coding from absolute zero and eventually build real systems. I have no coding experience. Please create a learning plan for me and start with the first lesson."
-            st.rerun()
-    
     st.write("")
     
     if st.button(
-        "💻\n\n**Just Teach Me to Code**\n\nNo specific project yet — I just want to learn programming from zero.",
-        use_container_width=True
+        "🚀  Start Learning",
+        use_container_width=True,
+        type="primary"
     ):
-        st.session_state.pending_start = "I want to learn programming from absolute zero. I don't have a specific project in mind yet. Please ask me some questions to understand what I should learn and create a personalized curriculum."
+        st.session_state.pending_start = "I'm ready to start learning from absolute zero. I don't know anything about coding. Please assess what I want to build and start teaching me from the very first concept."
         st.rerun()
     
     st.write("")
-    st.caption("You'll get: interactive lessons, a code sandbox to practice, and a mentor that reviews your work.")
+    st.write("")
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.caption("📚 Concepts")
+        st.caption("0 learned")
+    with col2:
+        st.caption("💻 Exercises")  
+        st.caption("0 completed")
+    with col3:
+        st.caption("📊 Progress")
+        st.caption("Just starting")
 
-# ============ HANDLE PROJECT START ============
+# ============ HANDLE START ============
 if st.session_state.pending_start:
     user_msg = st.session_state.pending_start
     st.session_state.pending_start = None
     
     st.session_state.messages.append({"role": "user", "content": user_msg})
     
-    with st.spinner("Creating your learning plan..."):
-        response = get_ai_response(user_msg)
-        st.session_state.messages.append({"role": "assistant", "content": response})
+    with st.chat_message("assistant"):
+        placeholder = st.empty()
+        response = get_ai_response_streaming(user_msg, placeholder)
     
+    st.session_state.messages.append({"role": "assistant", "content": response})
     st.rerun()
 
-# ============ MAIN INTERFACE (Tabs) ============
-if len(st.session_state.messages) > 0:
+# ============ PROGRESS BAR ============
+if len(st.session_state.messages) > 2:
+    concepts = len(st.session_state.concepts_learned)
+    exercises = st.session_state.exercises_completed
+    
+    st.markdown(f"""
+    <div class="progress-bar">
+        <span>📚 {concepts} concept{'s' if concepts != 1 else ''} learned</span>
+        <span>💻 {exercises} exercise{'s' if exercises != 1 else ''} completed</span>
+    </div>
+    """, unsafe_allow_html=True)
 
-    tab1, tab2, tab3 = st.tabs(["💬 Mentor", "💻 Code Sandbox", "📊 Visualize"])
+# ============ CHAT HISTORY ============
+for message in st.session_state.messages:
+    display_message(message["content"], message["role"])
 
-    # ============ TAB 1: CHAT ============
-    with tab1:
-        # Display chat history
-        for message in st.session_state.messages:
-            with st.chat_message(message["role"]):
-                st.write(message["content"])
+# ============ INLINE CODE EDITOR ============
+if st.session_state.get("show_code_editor", False):
+    
+    st.markdown("""
+    <div class="code-section">
+        <div class="code-section-header">
+            <span class="label">📝 Practice</span>
+            <span class="lang">python</span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Exercise description
+    st.info(f"**Your task:** {st.session_state.code_exercise}")
+    
+    # Code editor
+    code = st.text_area(
+        "",
+        value=st.session_state.code_content,
+        height=180,
+        key=f"code_editor_{st.session_state.exercises_completed}",
+        label_visibility="collapsed",
+        placeholder="# Type your Python code here..."
+    )
+    
+    # Action buttons
+    col1, col2 = st.columns([1, 1])
+    
+    with col1:
+        if st.button("▶  Run", use_container_width=True, type="primary"):
+            st.session_state.code_content = code
+            
+            with st.spinner("Running..."):
+                output, error, has_fig, fig = execute_code(code)
+                st.session_state.code_output = output
+                st.session_state.code_error = error
+                st.session_state.code_ran = True
+                st.session_state.has_plot = has_fig
+                st.session_state.current_plot = fig
+    
+    with col2:
+        if st.button("✓  Submit to Mentor", use_container_width=True):
+            if not st.session_state.code_ran:
+                st.warning("Run your code first, then submit.")
+            else:
+                # Build submission
+                submission = f"I completed the exercise.\n\nMy code:\n```python\n{code}\n```\n\n"
+                
+                if st.session_state.code_output:
+                    submission += f"Output:\n```\n{st.session_state.code_output}\n```\n"
+                
+                if st.session_state.code_error and st.session_state.code_error != "":
+                    submission += f"I got an error:\n```\n{st.session_state.code_error}\n```\nPlease help me fix it."
+                else:
+                    submission += "Please review my work."
+                
+                # Add to chat
+                st.session_state.messages.append({"role": "user", "content": submission})
+                
+                # Update stats
+                st.session_state.exercises_completed += 1
+                
+                # Hide editor
+                st.session_state.show_code_editor = False
+                
+                # Get AI review
+                with st.chat_message("assistant"):
+                    placeholder = st.empty()
+                    response = get_ai_response_streaming(submission, placeholder)
+                
+                st.session_state.messages.append({"role": "assistant", "content": response})
+                st.rerun()
+    
+    # Output display
+    if st.session_state.code_ran:
+        if st.session_state.code_output:
+            st.markdown(f"""
+            <div class="code-section">
+                <div class="output-section">
+                    <div class="output-label">Output</div>
+                    <div class="output-content">{st.session_state.code_output}</div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
         
-        # Chat input
-        if prompt := st.chat_input("Ask anything or submit your code output..."):
-            st.session_state.messages.append({"role": "user", "content": prompt})
-            with st.chat_message("user"):
-                st.write(prompt)
+        if st.session_state.code_error and "Traceback" in st.session_state.code_error:
+            # Clean up traceback for display
+            error_lines = st.session_state.code_error.split('\n')
+            clean_error = '\n'.join(error_lines[-5:]) if len(error_lines) > 5 else st.session_state.code_error
+            
+            st.markdown(f"""
+            <div class="code-section">
+                <div class="output-section">
+                    <div class="output-label error">Error</div>
+                    <div class="output-content error">{clean_error}</div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+# ============ INLINE VISUALIZATION ============
+if st.session_state.get("has_plot", False) and st.session_state.get("current_plot"):
+    
+    st.markdown("""
+    <div class="code-section">
+        <div class="code-section-header">
+            <span class="label">📊 Visualization</span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    try:
+        st.pyplot(st.session_state.current_plot, use_container_width=True)
+    except:
+        st.caption("Plot could not be rendered.")
+    
+    st.write("")
+
+# ============ INLINE QUIZ ============
+if st.session_state.get("show_quiz", False):
+    
+    st.markdown(f"""
+    <div class="quiz-section">
+        <div class="quiz-question">🤔 {st.session_state.quiz_question}</div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    for i, option in enumerate(st.session_state.quiz_options):
+        if st.button(option, key=f"quiz_option_{i}", use_container_width=True):
+            st.session_state.show_quiz = False
+            
+            answer_msg = f"My answer: {option}"
+            st.session_state.messages.append({"role": "user", "content": answer_msg})
             
             with st.chat_message("assistant"):
-                with st.spinner(""):
-                    response = get_ai_response(prompt)
-                    st.write(response)
+                placeholder = st.empty()
+                response = get_ai_response_streaming(answer_msg, placeholder)
             
             st.session_state.messages.append({"role": "assistant", "content": response})
+            st.rerun()
+    
+    st.write("")
 
-    # ============ TAB 2: CODE SANDBOX ============
-    with tab2:
-        st.markdown("##### 💻 Code Sandbox — Write and run code")
-        st.write("")
-        
-        # Language info
-        st.caption("Python execution environment. NumPy and math are pre-imported.")
-        
-        # Code editor
-        code = st.text_area(
-            "Code Editor",
-            value=st.session_state.code_editor_content,
-            height=300,
-            key="code_input",
-            label_visibility="collapsed"
-        )
-        
-        # Buttons
-        col1, col2, col3 = st.columns([1, 1, 2])
-        
-        with col1:
-            if st.button("▶️ Run", use_container_width=True, type="primary"):
-                st.session_state.code_editor_content = code
-                
-                with st.spinner("Running..."):
-                    output, error, exec_time, has_plot = execute_code(code)
-                    
-                    st.session_state.code_output = output
-                    st.session_state.code_error = error
-                    
-                    # Save to history
-                    st.session_state.code_history.append({
-                        "code": code,
-                        "output": output,
-                        "error": error,
-                        "timestamp": time.strftime("%H:%M:%S")
-                    })
-        
-        with col2:
-            if st.button("🗑️ Clear", use_container_width=True):
-                st.session_state.code_editor_content = "# Write your code here\nprint('Hello, World!')"
-                st.session_state.code_output = ""
-                st.session_state.code_error = ""
-                st.rerun()
-        
-        with col3:
-            if st.button("📤 Send to Mentor", use_container_width=True):
-                # Create a message to send to the mentor
-                code_result = f"I ran this code:\n```python\n{code}\n```\n\nOutput:\n```\n{st.session_state.code_output}\n```"
-                if st.session_state.code_error:
-                    code_result += f"\n\nError:\n```\n{st.session_state.code_error}\n```"
-                
-                st.session_state.messages.append({"role": "user", "content": code_result})
-                
-                with st.spinner("Mentor is reviewing your code..."):
-                    response = get_ai_response(code_result)
-                    st.session_state.messages.append({"role": "assistant", "content": response})
-                
-                st.rerun()
-        
-        st.write("")
-        
-        # Display output
-        if st.session_state.code_output:
-            st.markdown("**Output:**")
-            st.markdown(
-                f'<div class="output-box">{st.session_state.code_output}</div>',
-                unsafe_allow_html=True
-            )
-        
-        # Display error
-        if st.session_state.code_error:
-            st.markdown("**Error:**")
-            st.markdown(
-                f'<div class="error-box">{st.session_state.code_error}</div>',
-                unsafe_allow_html=True
-            )
-        
-        # Execution history
-        if st.session_state.code_history:
-            st.write("")
-            st.markdown("---")
-            st.markdown("##### Recent Runs:")
-            
-            for i, entry in enumerate(reversed(st.session_state.code_history[-5:])):
-                with st.expander(f"Run at {entry['timestamp']}"):
-                    st.code(entry["code"], language="python")
-                    if entry["output"]:
-                        st.text_area("Output", entry["output"], height=100, disabled=True)
+# ============ CHAT INPUT ============
+if prompt := st.chat_input("Ask anything..."):
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    
+    with st.chat_message("user"):
+        st.write(prompt)
+    
+    with st.chat_message("assistant"):
+        placeholder = st.empty()
+        response = get_ai_response_streaming(prompt, placeholder)
+    
+    st.session_state.messages.append({"role": "assistant", "content": response})
+    st.rerun()
 
-    # ============ TAB 3: VISUALIZATION ============
-    with tab3:
-        st.markdown("##### 📊 Visualization Sandbox — Plots and diagrams")
-        st.write("")
-        
-        st.info("""
-        This sandbox renders any matplotlib plots from your code runs.
-        
-        **How to use:**
-        1. Go to the Code Sandbox tab
-        2. Write code that creates a plot
-        3. Run it
-        4. Come back here to see the visualization
-        """)
-        
-        # Check for any figures in the code history
-        try:
-            import matplotlib
-            matplotlib.use('Agg')
-            import matplotlib.pyplot as plt
-            
-            # Try to get current figure from the last code run
-            if len(st.session_state.code_history) > 0:
-                last_code = st.session_state.code_history[-1]["code"]
-                
-                # Re-execute the code to get the plot
-                old_stdout = sys.stdout
-                sys.stdout = io.StringIO()
-                
-                try:
-                    namespace = {"__name__": "__main__"}
-                    exec(last_code, namespace)
-                    
-                    # Check for figures
-                    if plt.get_fignums():
-                        st.pyplot(plt.gcf())
-                    else:
-                        st.caption("No plots detected. Write code that uses matplotlib to create visualizations.")
-                        
-                except:
-                    st.caption("Run some code with matplotlib in the Code Sandbox first.")
-                
-                finally:
-                    sys.stdout = old_stdout
-            else:
-                st.caption("Run some code in the Code Sandbox first.")
-                
-        except Exception as e:
-            st.caption(f"Visualization not available: {str(e)}")
+# ============ RESET (Subtle) ============
+if len(st.session_state.messages) > 5:
+    st.write("")
+    col1, col2, col3 = st.columns([1, 1, 1])
+    with col2:
+        if st.button("Start Over", use_container_width=True):
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
+            init_state()
+            st.rerun()
 
 # ============ FOOTER ============
-st.markdown("---")
-st.caption("Studio — Everything you need to learn, build, and grow.")
-
-# ============ CLEAR BUTTON (Subtle) ============
-if len(st.session_state.messages) > 0:
-    st.write("")
-    if st.button("🗑️ Start Over (Clear All)"):
-        st.session_state.messages = []
-        st.session_state.code_history = []
-        st.session_state.code_output = ""
-        st.session_state.code_error = ""
-        st.session_state.pending_start = None
-        st.rerun()
+st.markdown("""
+<div style="text-align: center; padding: 2rem 0 1rem 0; border-top: 1px solid #1A1A1A; margin-top: 2rem;">
+    <span style="color: #3A3A3C; font-size: 0.6875rem; letter-spacing: 0.02em;">STUDIO</span>
+</div>
+""", unsafe_allow_html=True)
