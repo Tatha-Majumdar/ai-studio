@@ -7,11 +7,47 @@ import contextlib
 import traceback
 import re
 import json
+import html
 import numpy as np
 import time
 
 API_BASE = "https://api.stepfun.ai/step_plan/v1"
 HISTORY = "data.json"
+
+
+def esc(s):
+    """HTML-escape dynamic text before injecting into st.markdown HTML."""
+    return html.escape("" if s is None else str(s))
+
+
+try:
+    from streamlit_ace import st_ace as _st_ace
+except Exception:
+    _st_ace = None
+
+
+def edit_code(value, key):
+    """Practice-sandbox editor: syntax-highlighted Ace editor when available,
+    plain text_area fallback otherwise (Streamlit Cloud safe)."""
+    if _st_ace is not None:
+        try:
+            out = _st_ace(
+                value=value,
+                language="python",
+                theme="monokai",
+                key=key,
+                height=220,
+                font_size=13,
+                show_gutter=True,
+                wrap=True,
+                auto_update=True,
+            )
+            return out if isinstance(out, str) else value
+        except Exception:
+            pass
+    return st.text_area(
+        "", value=value, height=140, key=key, label_visibility="collapsed"
+    )
 
 # ============ STATE ============
 if "msgs" not in st.session_state:
@@ -28,6 +64,8 @@ if "err" not in st.session_state:
     st.session_state.err = ""
 if "ran" not in st.session_state:
     st.session_state.ran = False
+if "plot" not in st.session_state:
+    st.session_state.plot = None
 if "start" not in st.session_state:
     st.session_state.start = None
 if "model" not in st.session_state:
@@ -62,12 +100,14 @@ except:
     KEY = os.environ.get("STEPFUN_API_KEY", "")
 
 # ============ PROMPT — SHORT, BEHAVIORAL ONLY ============
+# Kept under ~55 words on purpose: long prompts cause empty StepFun responses.
+# Behavioral rules only — rendering/execution is handled by the app code.
 PROMPT = (
-    "You teach Topology Optimization. Student is beginner. "
-    "Write matplotlib code with title, axis labels, and annotations for every concept. "
-    "Use ```python code blocks. Never say imagine. "
-    "One question at a time. Under 80 words. "
-    "End exercises with [PRACTICE]."
+    "You mentor beginners in Topology Optimization and System Design. "
+    "Every concept gets one matplotlib plot with plt.title(), plt.xlabel(), plt.ylabel() and annotations — unlabeled plots are wrong. "
+    "Send code in ```python fences. Never say imagine. "
+    "Ask one short question (under 80 words), then stop and wait. "
+    "End exercises with [PRACTICE] and starter code."
 )
 
 # ============ API ============
@@ -170,27 +210,73 @@ def run_code(code):
         return cap_out.getvalue(), traceback.format_exc(), None
 
 # ============ CODE DETECTION — App handles this, not the AI ============
+def _looks_like_mpl(code):
+    """Heuristic: is this block matplotlib code we should execute?"""
+    if not code:
+        return False
+    return ("plt." in code or "matplotlib" in code or "subplot" in code)
+
+
+def _extract_bare_mpl(text):
+    """Fallback: find unfenced matplotlib code (AI forgot the fences).
+
+    Looks for the longest run of code-like lines containing plt calls.
+    Returns the code string, or '' if nothing convincing is found.
+    """
+    if not text or "plt." not in text:
+        return ""
+    line_re = re.compile(
+        r"^\s*(import\s|from\s|plt\.|fig[\s\.,=]|ax[\s\.,=]|np\.|"
+        r"for\s|while\s|def\s|with\s|if\s|elif\s|else\s*:|return\s|"
+        r"print\(|@|#|[A-Za-z_][\w\s,\[\]\(\)'\"\"]*\s*=)"
+    )
+
+    def _good(run):
+        return len(run) >= 3 and sum("plt." in ln for ln in run) >= 1
+
+    best, current = [], []
+    for line in text.splitlines():
+        s = line.strip()
+        if not s:
+            if _good(current) and len(current) > len(best):
+                best = list(current)
+            current = []
+        elif line_re.match(line) or s.startswith("#"):
+            current.append(line)
+        else:
+            if _good(current) and len(current) > len(best):
+                best = list(current)
+            current = []
+    if _good(current) and len(current) > len(best):
+        best = list(current)
+    return "\n".join(best).strip()
+
+
 def extract_code(text):
     """Find python code blocks and separate them from text."""
     if not text:
         return "", []
 
-    # Find all code blocks
-    blocks = re.findall(r"```python\s*\n(.*?)```", text, flags=re.DOTALL)
+    # Find all fenced code blocks (```python ... ``` or plain ``` ... ```)
+    blocks = re.findall(r"```(?:python)?\s*\n(.*?)```", text, flags=re.DOTALL)
     if not blocks:
-        blocks = re.findall(r"```\s*\n(.*?)```", text, flags=re.DOTALL)
+        blocks = re.findall(r"```(.*?)```", text, flags=re.DOTALL)
 
     # Filter for matplotlib code
-    mpl_blocks = [b.strip() for b in blocks if "plt." in b or "matplotlib" in b]
+    mpl_blocks = [b.strip() for b in blocks if _looks_like_mpl(b)]
 
-    # Remove code from text
+    # Remove fenced code from text
     clean_text = text
-    for b in blocks:
-        clean_text = clean_text.replace("```python\n" + b + "\n```", "")
-        clean_text = clean_text.replace("```" + b + "```", "")
-    clean_text = re.sub(r"```python\s*\n.*?```", "", clean_text, flags=re.DOTALL)
-    clean_text = re.sub(r"```\s*\n.*?```", "", clean_text, flags=re.DOTALL)
+    clean_text = re.sub(r"```(?:python)?\s*\n.*?```", "", clean_text, flags=re.DOTALL)
+    clean_text = re.sub(r"```.*?```", "", clean_text, flags=re.DOTALL)
     clean_text = re.sub(r"\[PRACTICE\].*", "", clean_text, flags=re.DOTALL)
+
+    # Fallback: AI produced matplotlib code without fences — still run it,
+    # but leave the prose untouched so nothing is lost.
+    if not mpl_blocks:
+        bare = _extract_bare_mpl(clean_text)
+        if bare:
+            mpl_blocks = [bare]
 
     return clean_text.strip(), mpl_blocks
 
@@ -204,8 +290,11 @@ html,body{margin:0;padding:0;background:#0a0a0a;color:#fff;font-family:-apple-sy
 .stApp{min-height:100vh}
 #MainMenu,footer,[data-testid="stSidebar"],[data-testid="stToolbar"]{display:none!important}
 
-.header-bar{position:sticky;top:0;z-index:999;background:#0a0a0a;padding:.5rem .75rem;border-bottom:1px solid #1a1a1a;margin-bottom:.5rem}
-.block-container{max-width:720px;margin:0 auto;padding:0 .5rem 2rem .5rem}
+.app-header{position:fixed;top:0;left:0;right:0;z-index:1000;background:rgba(10,10,10,.92);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border-bottom:1px solid #1a1a1a;padding:.6rem 1rem;display:flex;align-items:center;justify-content:center;gap:.5rem}
+.app-title{font-size:1.25rem;font-weight:800;letter-spacing:-.04em;color:#fff;margin:0}
+.app-model{font-size:.62rem;color:#30d158;border:1px solid rgba(48,209,88,.4);border-radius:20px;padding:.1rem .5rem;white-space:nowrap}
+.app-model.off{color:#666;border-color:#2a2a2a}
+.block-container{max-width:720px;margin:0 auto;padding:4.4rem .5rem 2rem .5rem!important}
 
 [data-testid="stChatInput"]{position:sticky;bottom:0;background:#0a0a0a;z-index:998;padding:.5rem 0 .75rem 0;border-top:1px solid #1a1a1a}
 [data-testid="stChatInput"] textarea{background:#141414!important;border:1px solid #333!important;border-radius:18px!important;color:#fff!important;font-size:.95rem!important;padding:.875rem 1.125rem!important;min-height:48px!important}
@@ -226,6 +315,7 @@ html,body{margin:0;padding:0;background:#0a0a0a;color:#fff;font-family:-apple-sy
 
 .stTextArea textarea{background:#0a0a0a!important;border:1px solid #2a2a2a!important;border-radius:12px!important;font-family:monospace!important;color:#e0e0e0!important;font-size:.875rem!important;padding:.875rem!important;min-height:130px!important}
 .stTextArea textarea:focus{border-color:#0a84ff!important}
+.ace_editor,.ace-editor-container{border:1px solid #2a2a2a!important;border-radius:12px!important;overflow:hidden;margin:.5rem 0}
 
 .card{background:#141414;border:1px solid #2a2a2a;border-radius:16px;padding:1.25rem;margin:.5rem 0;text-align:center}
 .card h3{color:#fff;font-size:1.05rem;font-weight:700;margin:0 0 .25rem 0}
@@ -244,34 +334,57 @@ html,body{margin:0;padding:0;background:#0a0a0a;color:#fff;font-family:-apple-sy
 </style>
 """, unsafe_allow_html=True)
 
-# Auto-scroll
-st.markdown("""
-<script>
-window.addEventListener('load',function(){setTimeout(function(){window.scrollTo({top:document.body.scrollHeight,behavior:'smooth'})},200)});
-</script>
-""", unsafe_allow_html=True)
+# Auto-scroll — raw <script> tags are stripped by Streamlit, so scroll the
+# parent document from inside a zero-height iframe instead (works on Cloud).
+def autoscroll():
+    try:
+        from streamlit.components.v1 import html as _html
+        _html(
+            "<script>"
+            "(function(){"
+            "var d=window.parent.document;"
+            "var m=d.querySelector('section.main');"
+            "if(m){m.scrollTop=m.scrollHeight;}"
+            "else{window.parent.scrollTo(0,999999);}"
+            "})();"
+            "</script>",
+            height=0,
+        )
+    except Exception:
+        pass
 
-# ============ HEADER ============
-st.markdown('<div class="header-bar">', unsafe_allow_html=True)
-h1, h2 = st.columns([4, 1])
-with h1:
-    st.markdown('<h1 style="font-size:1.4rem;font-weight:800;letter-spacing:-.04em;margin:0;color:#fff;">Studio.</h1>', unsafe_allow_html=True)
-with h2:
+# ============ HEADER — fixed bar (pure HTML) + Reset in flow ============
+# NOTE: Streamlit renders markdown inside .block-container, so position:sticky
+# on in-flow content never pins reliably. position:fixed IS viewport-relative
+# and works — but a fixed node cannot host a working st.button, so Reset
+# lives in a right-aligned row directly under the bar.
+model_badge = (
+    '<span class="app-model">' + esc(st.session_state.model) + '</span>'
+    if st.session_state.model
+    else '<span class="app-model off">no model</span>'
+)
+st.markdown(
+    '<div class="app-header"><p class="app-title">Studio.</p>' + model_badge + '</div>',
+    unsafe_allow_html=True,
+)
+_, rcol = st.columns([5, 1])
+with rcol:
     if st.button("Reset", key="reset_top"):
         st.session_state.msgs = []
         st.session_state.editor = False
         st.session_state.task = ""
+        st.session_state.code = "# Write code here\n"
+        st.session_state.out = ""
+        st.session_state.err = ""
         st.session_state.ran = False
+        st.session_state.plot = None
         st.session_state.tested = False
         st.session_state.model = None
         try:
             os.remove(HISTORY)
-        except:
+        except Exception:
             pass
         st.rerun()
-if st.session_state.model:
-    st.markdown('<p style="color:#30d158;font-size:.6rem;text-align:center;margin:.15rem 0 0 0;">' + st.session_state.model + '</p>', unsafe_allow_html=True)
-st.markdown('</div>', unsafe_allow_html=True)
 
 # ============ MODEL SETUP ============
 if not st.session_state.tested:
@@ -341,17 +454,17 @@ for msg_idx, m in enumerate(st.session_state.msgs):
                     if fig is not None:
                         st.pyplot(fig, use_container_width=True)
                     if out:
-                        st.markdown('<div class="chat-output">' + out + '</div>', unsafe_allow_html=True)
+                        st.markdown('<div class="chat-output">' + esc(out) + '</div>', unsafe_allow_html=True)
                     if err and "Traceback" in err:
                         lines = err.split("\n")
-                        st.markdown('<div class="chat-error">' + "\n".join(lines[-3:]) + '</div>', unsafe_allow_html=True)
+                        st.markdown('<div class="chat-error">' + esc("\n".join(lines[-3:])) + '</div>', unsafe_allow_html=True)
 
             # 3. Show practice sandbox if this is the last message and editor is active
             if st.session_state.editor and msg_idx == len(st.session_state.msgs) - 1:
                 if st.session_state.task:
                     st.info("Practice: " + st.session_state.task)
 
-                code = st.text_area("", value=st.session_state.code, height=140, key=f"p{msg_idx}", label_visibility="collapsed")
+                code = edit_code(st.session_state.code, key=f"p{msg_idx}")
 
                 a, b = st.columns(2)
                 with a:
@@ -383,11 +496,13 @@ for msg_idx, m in enumerate(st.session_state.msgs):
 
                 if st.session_state.ran:
                     if st.session_state.out:
-                        st.markdown('<div class="chat-output">' + st.session_state.out + '</div>', unsafe_allow_html=True)
+                        st.markdown('<div class="chat-output">' + esc(st.session_state.out) + '</div>', unsafe_allow_html=True)
                     if st.session_state.err and "Traceback" in st.session_state.err:
-                        st.markdown('<div class="chat-error">' + "\n".join(st.session_state.err.split("\n")[-3:]) + '</div>', unsafe_allow_html=True)
+                        st.markdown('<div class="chat-error">' + esc("\n".join(st.session_state.err.split("\n")[-3:])) + '</div>', unsafe_allow_html=True)
                     if st.session_state.plot is not None:
                         st.pyplot(st.session_state.plot, use_container_width=True)
+
+autoscroll()
 
 # ============ INPUT ============
 if len(st.session_state.msgs) > 0:
@@ -412,7 +527,7 @@ if len(st.session_state.msgs) > 0:
                     if fig is not None:
                         st.pyplot(fig, use_container_width=True)
                     if out:
-                        st.markdown('<div class="chat-output">' + out + '</div>', unsafe_allow_html=True)
+                        st.markdown('<div class="chat-output">' + esc(out) + '</div>', unsafe_allow_html=True)
 
         st.session_state.msgs.append({"role": "assistant", "content": reply})
         save()
