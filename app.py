@@ -8,10 +8,9 @@ import traceback
 import re
 import json
 
-# ============ CONFIG ============
-API_BASE = "https://api.stepfun.ai/v1"  # Fixed: removed step_plan
+# ============ YOUR EXACT ENDPOINT ============
+API_BASE = "https://api.stepfun.ai/step_plan/v1"
 HISTORY = "data.json"
-MODELS = ["step-1-8k", "step-1-32k", "step-2-16k", "step-1v-8k"]
 
 # ============ INIT ============
 if "msgs" not in st.session_state:
@@ -33,7 +32,9 @@ if "plot" not in st.session_state:
 if "start" not in st.session_state:
     st.session_state.start = None
 if "model" not in st.session_state:
-    st.session_state.model = MODELS[0]
+    st.session_state.model = None
+if "tested" not in st.session_state:
+    st.session_state.tested = False
 
 # ============ SAVE / LOAD ============
 def save():
@@ -58,7 +59,7 @@ def load():
 
 load()
 
-# ============ API KEY ============
+# ============ API KEY (FROM SECRETS) ============
 KEY = ""
 try:
     KEY = st.secrets["STEPFUN_API_KEY"]
@@ -80,60 +81,104 @@ PROMPT = (
     "8. Start by asking about their coding experience."
 )
 
+# ============ FIND WORKING MODEL ============
+def test_models():
+    """Test which model works with this API key."""
+    if not KEY:
+        return None, "No API key"
+
+    models_to_try = [
+        "step-1-8k",
+        "step-1-32k",
+        "step-2-16k",
+        "step-5-preview",
+        "step-1v-8k",
+        "step-1v-32k",
+    ]
+
+    working = []
+    errors = []
+
+    for m in models_to_try:
+        try:
+            c = OpenAI(api_key=KEY, base_url=API_BASE, timeout=15)
+            r = c.chat.completions.create(
+                model=m,
+                messages=[{"role": "user", "content": "Say OK"}],
+                max_tokens=5
+            )
+            reply = r.choices[0].message.content
+            if reply:
+                working.append(m)
+        except Exception as e:
+            err = str(e)
+            if "404" in err:
+                errors.append(f"{m}: not available")
+            elif "401" in err:
+                return None, "Invalid API key"
+            else:
+                errors.append(f"{m}: {err[:50]}")
+
+    if working:
+        return working[0], f"Working model: {working[0]}"
+    else:
+        return None, "No working models found. Errors: " + "; ".join(errors[:3])
+
 # ============ API CALL ============
 def ask_ai(msg):
     if not KEY:
-        return "ERROR: No API key found. Add STEPFUN_API_KEY in Streamlit Cloud Secrets."
+        return "ERROR: No API key. Add STEPFUN_API_KEY in Settings > Secrets."
 
-    errors = []
+    # Use the first working model
+    if not st.session_state.model:
+        model, status = test_models()
+        if model:
+            st.session_state.model = model
+        else:
+            return "ERROR: " + status
 
-    for m in MODELS:
-        try:
-            c = OpenAI(api_key=KEY, base_url=API_BASE, timeout=30)
-            chat = [{"role": "system", "content": PROMPT}]
+    try:
+        c = OpenAI(api_key=KEY, base_url=API_BASE, timeout=30)
 
-            for x in st.session_state.msgs:
-                chat.append({"role": x.get("role", "user"), "content": x.get("content", "")})
+        chat = [{"role": "system", "content": PROMPT}]
 
-            chat.append({"role": "user", "content": msg})
+        for x in st.session_state.msgs:
+            chat.append({"role": x.get("role", "user"), "content": x.get("content", "")})
 
-            r = c.chat.completions.create(
-                model=m,
-                messages=chat,
-                max_tokens=3000,
-                temperature=0.6
-            )
+        chat.append({"role": "user", "content": msg})
 
-            reply = r.choices[0].message.content
+        r = c.chat.completions.create(
+            model=st.session_state.model,
+            messages=chat,
+            max_tokens=3000,
+            temperature=0.6
+        )
 
-            if reply and len(reply.strip()) > 5:
-                st.session_state.model = m
-                if "[PRACTICE]" in reply:
-                    match = re.search(r'\[PRACTICE\]\s*(.+)', reply, re.DOTALL)
-                    if match:
-                        st.session_state.task = match.group(1).strip()
-                        st.session_state.editor = True
-                        st.session_state.ran = False
-                        st.session_state.out = ""
-                        st.session_state.err = ""
-                return reply
-            else:
-                errors.append(f"{m}: empty response")
+        reply = r.choices[0].message.content
 
-        except Exception as e:
-            err_str = str(e)
-            if "401" in err_str:
-                return "ERROR: Invalid API key. Check your key."
-            elif "404" in err_str:
-                errors.append(f"{m}: not found")
-            elif "429" in err_str:
-                return "ERROR: Rate limited. Wait 30 seconds."
-            elif "timeout" in err_str.lower():
-                errors.append(f"{m}: timeout")
-            else:
-                errors.append(f"{m}: {err_str[:80]}")
+        if reply and len(reply.strip()) > 5:
+            if "[PRACTICE]" in reply:
+                match = re.search(r'\[PRACTICE\]\s*(.+)', reply, re.DOTALL)
+                if match:
+                    st.session_state.task = match.group(1).strip()
+                    st.session_state.editor = True
+                    st.session_state.ran = False
+                    st.session_state.out = ""
+                    st.session_state.err = ""
+            return reply
+        else:
+            return "ERROR: Empty response from API. Try again."
 
-    return "ERROR: Could not connect to StepFun API.\n\nTried:\n" + "\n".join(errors)
+    except Exception as e:
+        err = str(e)
+        if "401" in err:
+            return "ERROR: Invalid API key. Check your key in Secrets."
+        elif "404" in err:
+            return f"ERROR: Model not found. Model: {st.session_state.model}"
+        elif "429" in err:
+            return "ERROR: Rate limited. Wait 30 seconds."
+        else:
+            return f"ERROR: {err[:150]}"
 
 # ============ RUN CODE ============
 def run_code(code):
@@ -385,26 +430,26 @@ st.markdown('<div class="title">Studio.</div>', unsafe_allow_html=True)
 st.markdown('<div class="subtitle">Learn Engineering. Build Real Things.</div>', unsafe_allow_html=True)
 
 # ============ CONNECTION TEST ============
-if KEY:
-    if st.button("Test API Connection"):
-        try:
-            c = OpenAI(api_key=KEY, base_url=API_BASE, timeout=10)
-            r = c.chat.completions.create(
-                model=st.session_state.model,
-                messages=[{"role": "user", "content": "Say hello"}],
-                max_tokens=10
-            )
-            reply = r.choices[0].message.content
-            st.success(f"Connected! Model: {st.session_state.model}")
-            st.write(f"Response: {reply}")
-        except Exception as e:
-            st.error(f"Failed: {str(e)[:200]}")
+if not st.session_state.tested:
+    if st.button("Test Connection"):
+        with st.spinner("Testing..."):
+            model, status = test_models()
+
+        if model:
+            st.session_state.model = model
+            st.session_state.tested = True
+            st.success(f"Connected! Using model: {model}")
+        else:
+            st.error(status)
             st.write(f"**Endpoint:** {API_BASE}")
-            st.write(f"**Model:** {st.session_state.model}")
             st.write(f"**Key length:** {len(KEY)} characters")
-else:
-    st.error("No API key found")
-    st.info("Go to Settings > Secrets and add: STEPFUN_API_KEY = \"your_key\"")
+            if len(KEY) < 10:
+                st.write("**Your API key might not be set correctly in Secrets**")
+elif st.session_state.model:
+    st.markdown(
+        f'<p style="color:#30d158;font-size:0.75rem;text-align:center;margin:0 0 1rem 0;">Connected - Model: {st.session_state.model}</p>',
+        unsafe_allow_html=True
+    )
 
 # ============ START SCREEN ============
 if len(st.session_state.msgs) == 0:
@@ -571,6 +616,7 @@ with mid:
         st.session_state.out = ""
         st.session_state.err = ""
         st.session_state.plot = None
+        st.session_state.tested = False
         try:
             os.remove(HISTORY)
         except:
