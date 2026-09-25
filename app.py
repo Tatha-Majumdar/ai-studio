@@ -9,8 +9,9 @@ import re
 import json
 
 # ============ CONFIG ============
-API_BASE = "https://api.stepfun.ai/step_plan/v1"
+API_BASE = "https://api.stepfun.ai/v1"  # Fixed: removed step_plan
 HISTORY = "data.json"
+MODELS = ["step-1-8k", "step-1-32k", "step-2-16k", "step-1v-8k"]
 
 # ============ INIT ============
 if "msgs" not in st.session_state:
@@ -32,15 +33,12 @@ if "plot" not in st.session_state:
 if "start" not in st.session_state:
     st.session_state.start = None
 if "model" not in st.session_state:
-    st.session_state.model = "step-1-8k"
+    st.session_state.model = MODELS[0]
 
 # ============ SAVE / LOAD ============
 def save():
     try:
-        d = {
-            "msgs": st.session_state.msgs,
-            "model": st.session_state.model,
-        }
+        d = {"msgs": st.session_state.msgs, "model": st.session_state.model}
         with open(HISTORY, "w") as f:
             json.dump(d, f, default=str)
     except:
@@ -60,20 +58,21 @@ def load():
 
 load()
 
-# ============ API ============
+# ============ API KEY ============
 KEY = ""
 try:
     KEY = st.secrets["STEPFUN_API_KEY"]
 except:
     KEY = os.environ.get("STEPFUN_API_KEY", "")
 
+# ============ PROMPT ============
 PROMPT = (
     "You are a senior engineering mentor. You teach Topology Optimization and System Design. "
     "The student may have zero coding experience. "
     "RULES: "
     "1. Ask one question then STOP and wait. Never combine question with lesson. "
     "2. Never say imagine or visualize. Always show with code. "
-    "3. To show a visual, write code the student can run. "
+    "3. To show a visual, write matplotlib code the student can run. "
     "4. To give practice, end message with [PRACTICE] then the task. "
     "5. Keep responses under 150 words. "
     "6. One concept at a time. "
@@ -81,15 +80,16 @@ PROMPT = (
     "8. Start by asking about their coding experience."
 )
 
+# ============ API CALL ============
 def ask_ai(msg):
     if not KEY:
-        return "No API key found. Go to Settings > Secrets and add STEPFUN_API_KEY."
+        return "ERROR: No API key found. Add STEPFUN_API_KEY in Streamlit Cloud Secrets."
 
-    models = [st.session_state.model, "step-1-8k", "step-1-32k", "step-2-16k"]
+    errors = []
 
-    for m in models:
+    for m in MODELS:
         try:
-            c = OpenAI(api_key=KEY, base_url=API_BASE)
+            c = OpenAI(api_key=KEY, base_url=API_BASE, timeout=30)
             chat = [{"role": "system", "content": PROMPT}]
 
             for x in st.session_state.msgs:
@@ -108,7 +108,6 @@ def ask_ai(msg):
 
             if reply and len(reply.strip()) > 5:
                 st.session_state.model = m
-                # Check for practice marker
                 if "[PRACTICE]" in reply:
                     match = re.search(r'\[PRACTICE\]\s*(.+)', reply, re.DOTALL)
                     if match:
@@ -118,10 +117,23 @@ def ask_ai(msg):
                         st.session_state.out = ""
                         st.session_state.err = ""
                 return reply
-        except:
-            continue
+            else:
+                errors.append(f"{m}: empty response")
 
-    return "Could not connect. Check your API key and internet."
+        except Exception as e:
+            err_str = str(e)
+            if "401" in err_str:
+                return "ERROR: Invalid API key. Check your key."
+            elif "404" in err_str:
+                errors.append(f"{m}: not found")
+            elif "429" in err_str:
+                return "ERROR: Rate limited. Wait 30 seconds."
+            elif "timeout" in err_str.lower():
+                errors.append(f"{m}: timeout")
+            else:
+                errors.append(f"{m}: {err_str[:80]}")
+
+    return "ERROR: Could not connect to StepFun API.\n\nTried:\n" + "\n".join(errors)
 
 # ============ RUN CODE ============
 def run_code(code):
@@ -176,14 +188,14 @@ def run_code(code):
         err = traceback.format_exc()
         return out, err, None
 
-# ============ CLEAN TEXT ============
+# ============ CLEAN ============
 def clean(t):
     if not t:
         return ""
     t = re.sub(r'\[PRACTICE\].*', '', t, flags=re.DOTALL)
     return t.strip()
 
-# ============ PAGE ============
+# ============ PAGE SETUP ============
 st.set_page_config(page_title="Studio", layout="centered")
 
 # ============ STYLE ============
@@ -208,7 +220,6 @@ st.markdown("""
         padding-bottom: 5rem;
     }
 
-    /* Title */
     .title {
         text-align: center;
         font-size: 2rem;
@@ -222,10 +233,9 @@ st.markdown("""
         text-align: center;
         font-size: 0.85rem;
         color: #666;
-        margin-bottom: 1.5rem;
+        margin-bottom: 1rem;
     }
 
-    /* Chat bubbles */
     [data-testid="stChatMessage"] {
         background: transparent;
         border: none;
@@ -263,11 +273,6 @@ st.markdown("""
         font-size: 0.85em;
     }
 
-    /* Chat input - bigger and cleaner */
-    [data-testid="stChatInput"] {
-        padding: 0.5rem 0;
-    }
-
     [data-testid="stChatInput"] textarea {
         background: #141414 !important;
         border: 1px solid #333 !important;
@@ -277,19 +282,12 @@ st.markdown("""
         font-family: -apple-system, sans-serif !important;
         padding: 1rem 1.25rem !important;
         min-height: 56px !important;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.3) !important;
     }
 
     [data-testid="stChatInput"] textarea:focus {
         border-color: #0a84ff !important;
-        box-shadow: 0 0 0 3px rgba(10,132,255,0.15) !important;
     }
 
-    [data-testid="stChatInput"] textarea::placeholder {
-        color: #555 !important;
-    }
-
-    /* Buttons */
     .stButton > button {
         background: #0a84ff;
         color: white;
@@ -300,18 +298,12 @@ st.markdown("""
         font-size: 0.95rem;
         font-family: -apple-system, sans-serif;
         width: 100%;
-        transition: all 0.15s;
     }
 
     .stButton > button:hover {
         background: #409cff;
     }
 
-    .stButton > button:active {
-        background: #0868cc;
-    }
-
-    /* Code editor */
     .stTextArea textarea {
         background: #0a0a0a !important;
         border: 1px solid #1a1a1a !important;
@@ -319,16 +311,10 @@ st.markdown("""
         font-family: 'SF Mono', 'Menlo', monospace !important;
         color: #e0e0e0 !important;
         font-size: 0.9rem !important;
-        line-height: 1.6 !important;
         padding: 1rem !important;
         min-height: 160px !important;
     }
 
-    .stTextArea textarea:focus {
-        border-color: #0a84ff !important;
-    }
-
-    /* Cards */
     .card {
         background: #141414;
         border: 1px solid #2a2a2a;
@@ -351,7 +337,6 @@ st.markdown("""
         margin: 0;
     }
 
-    /* Output */
     .good {
         background: #0d0d0d;
         border: 1px solid rgba(48,209,88,0.3);
@@ -396,18 +381,35 @@ st.markdown("""
 
 # ============ UI ============
 
-# Title
 st.markdown('<div class="title">Studio.</div>', unsafe_allow_html=True)
 st.markdown('<div class="subtitle">Learn Engineering. Build Real Things.</div>', unsafe_allow_html=True)
 
-# Status
+# ============ CONNECTION TEST ============
 if KEY:
-    st.markdown('<p style="color:#30d158;font-size:0.7rem;text-align:center;margin:0 0 1rem 0;">Connected</p>', unsafe_allow_html=True)
+    if st.button("Test API Connection"):
+        try:
+            c = OpenAI(api_key=KEY, base_url=API_BASE, timeout=10)
+            r = c.chat.completions.create(
+                model=st.session_state.model,
+                messages=[{"role": "user", "content": "Say hello"}],
+                max_tokens=10
+            )
+            reply = r.choices[0].message.content
+            st.success(f"Connected! Model: {st.session_state.model}")
+            st.write(f"Response: {reply}")
+        except Exception as e:
+            st.error(f"Failed: {str(e)[:200]}")
+            st.write(f"**Endpoint:** {API_BASE}")
+            st.write(f"**Model:** {st.session_state.model}")
+            st.write(f"**Key length:** {len(KEY)} characters")
 else:
-    st.markdown('<p style="color:#ff453a;font-size:0.7rem;text-align:center;margin:0 0 1rem 0;">No API Key - Add in Secrets</p>', unsafe_allow_html=True)
+    st.error("No API key found")
+    st.info("Go to Settings > Secrets and add: STEPFUN_API_KEY = \"your_key\"")
 
-# ============ START ============
+# ============ START SCREEN ============
 if len(st.session_state.msgs) == 0:
+
+    st.write("")
 
     st.markdown("""
     <div class="card">
